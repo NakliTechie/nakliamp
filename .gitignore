@@ -1,0 +1,22 @@
+# OS junk
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+._*
+
+# Editor / tooling
+.vscode/
+.idea/
+*.swp
+*~
+
+# Working plan (per plan-folder convention — local only)
+plan/
+
+# Large local assets that should not be committed as-is
+# (golden-file audio fixtures land via a generator once the audio path opens;
+#  ignore stray downloads / caches here)
+*.log
