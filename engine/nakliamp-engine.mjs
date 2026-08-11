@@ -237,7 +237,13 @@ export function createNakliAmpEngine({
     const track = assertAudioOnly(metadata);
     const mime = nativeMime(file);
     const candidateUrl = URL.createObjectURL(file);
-    const candidateAudio = nativeAudioFactory({ url: candidateUrl, file, metadata });
+    let candidateAudio;
+    try {
+      candidateAudio = nativeAudioFactory({ url: candidateUrl, file, metadata });
+    } catch (error) {
+      URL.revokeObjectURL(candidateUrl);
+      throw error;
+    }
     if (!candidateAudio || typeof candidateAudio.play !== 'function') {
       URL.revokeObjectURL(candidateUrl);
       throw new TypeError('nativeAudioFactory must return an audio-like playback object.');
@@ -298,9 +304,15 @@ export function createNakliAmpEngine({
     try {
       return nextMode === 'r1' ? await loadR1(input, loadId) : await loadR2(input, loadId);
     } catch (error) {
-      if (error?.code !== 'ERR_NAKLIAMP_LOAD_SUPERSEDED' && error?.code !== 'ERR_ENGINE_LOAD_SUPERSEDED') {
-        recordError(error);
+      if (loadId !== latestLoadId) {
+        throw new NakliAmpError(
+          'SupersededLoadError',
+          'ERR_NAKLIAMP_LOAD_SUPERSEDED',
+          'A newer track selection replaced this request.',
+          error,
+        );
       }
+      if (error?.code !== 'ERR_NAKLIAMP_LOAD_SUPERSEDED' && error?.code !== 'ERR_ENGINE_LOAD_SUPERSEDED') recordError(error);
       throw error;
     }
   }
