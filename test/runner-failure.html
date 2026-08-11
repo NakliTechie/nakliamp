@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp runner diagnostic fixture</title>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script>
+setTimeout(() => {
+  console.error('L7_CONSOLE_SENTINEL');
+  fetch('./l7-network-sentinel.bin').catch(() => {});
+  setTimeout(() => {
+    const result = document.querySelector('#result');
+    result.dataset.status = 'fail';
+    result.textContent = 'L7_DECLARED_FAILURE';
+    document.title = 'FAIL — NakliAmp runner diagnostic fixture';
+  }, 250);
+}, 750);
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/NakliTechie/reel",
+    "commit": "28e871525b766d1ae84790e150eb447cc396badc",
+    "integrityPolicy": "committed-artifact"
+  },
+  "fixtures": [
+    { "file": "audio-mp3.mp3", "bytes": 12717, "sha256": "5e238d5d50c86f43138653dca37257d70e9d6db8debd5380eb84d918eb2d2003", "role": "audio-positive" },
+    { "file": "audio-flac.flac", "bytes": 21349, "sha256": "6ee433537f8cdb05ad89afc008833935028745f531be89c64cfae2b139d59f64", "role": "audio-positive" },
+    { "file": "audio-aac.m4a", "bytes": 9323, "sha256": "957c867673beb5d762f3ea61978bdcdd551699bd98151517ff85c491239ecf4b", "role": "audio-positive" },
+    { "file": "audio-opus.ogg", "bytes": 10993, "sha256": "4098fd77104e7bb542f905ebbb297b88639b5384c9d83f1e25c0ccc9b8ba3a36", "role": "audio-positive" },
+    { "file": "audio-vorbis.ogg", "bytes": 6955, "sha256": "36d6fed513f1fca2770dd51aba59bc02d8bebc65da5cb2e7f943eca84ecf8262", "role": "audio-positive" },
+    { "file": "audio-wav.wav", "bytes": 96078, "sha256": "1d81f2e779bf3398af555d3ebd99d96002f2fa44ce2e73800fb9708f6e7ea7e9", "role": "audio-positive" },
+    { "file": "audio-opus.mka", "bytes": 11154, "sha256": "c55fac8da218f56cbd1b1181bd2e1809f1098a2df00e6a3892c32174a68c805e", "role": "audio-positive" },
+    { "file": "audio-wma.wma", "bytes": 13344, "sha256": "6b7aa49aa785e9f92e9274639a57e7d3278d53f9f32b8d99d2ba172a2e85a4ba", "role": "audio-refusal" }
+  ]
+}

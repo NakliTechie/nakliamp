@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NakliAmp golden audio</title>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+
+const result = document.querySelector('#result');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function waitFor(check, message, timeoutMs = 8_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+async function fixture(name) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new File([await response.arrayBuffer()], name, { type: response.headers.get('content-type') || '' });
+}
+
+async function refusal(player, file) {
+  try {
+    await player.load(file);
+    return null;
+  } catch (error) {
+    return { name: error.name, code: error.code, message: error.message };
+  }
+}
+
+async function run() {
+  const player = createNakliAmpEngine({ version: 'test-m0' });
+  assert(player.caps().audioDecoder, 'AudioDecoder is unavailable in the Chromium gate.');
+  assert(player.caps().preferredPath === 'r1', 'Chromium did not select Reel R1.');
+
+  const cases = [
+    { file: 'audio-mp3.mp3', container: 'mp3', codec: 'mp3', channels: 1 },
+    { file: 'audio-flac.flac', container: 'flac', codec: 'flac', channels: 1 },
+    { file: 'audio-aac.m4a', container: 'mp4', codec: 'aac', channels: 1 },
+    { file: 'audio-opus.ogg', container: 'ogg', codec: 'opus', channels: 1 },
+    { file: 'audio-vorbis.ogg', container: 'ogg', codec: 'vorbis', channels: 2 },
+    { file: 'audio-wav.wav', container: 'wav', codec: 'pcm-s16', channels: 1 },
+    { file: 'audio-opus.mka', container: 'mkv', codec: 'opus', channels: 1 },
+  ];
+  const reports = [];
+
+  for (const expected of cases) {
+    const metadata = await player.load(await fixture(expected.file));
+    const loaded = player.state();
+    assert(metadata.path === 'r1', `${expected.file}: wrong playback path.`);
+    assert(loaded.media.container === expected.container, `${expected.file}: container mismatch (${loaded.media.container}).`);
+    assert(loaded.track?.codec === expected.codec, `${expected.file}: codec mismatch (${loaded.track?.codec}).`);
+    assert(loaded.track?.channels === expected.channels, `${expected.file}: channel mismatch (${loaded.track?.channels}).`);
+    assert(loaded.media.duration >= 0.9 && loaded.media.duration <= 1.2, `${expected.file}: duration mismatch.`);
+    assert(loaded.media.fingerprint?.startsWith(`${loaded.media.size}-`), `${expected.file}: fingerprint missing.`);
+    assert(loaded.honesty.decode === 'AudioDecoder', `${expected.file}: honesty path mismatch.`);
+    assert(loaded.honesty.localOnly === true, `${expected.file}: local-only claim missing.`);
+
+    await player.play();
+    await waitFor(() => player.state().clock.positionS > 0.15, `${expected.file}: audio clock did not advance.`);
+    player.pause();
+    const played = player.state();
+    assert(played.diagnostics.consumedFrames > 0, `${expected.file}: no PCM frames reached output.`);
+    assert(played.diagnostics.droppedFrames === 0, `${expected.file}: PCM frames dropped.`);
+    assert(played.diagnostics.lastError === null, `${expected.file}: playback error recorded.`);
+    reports.push({
+      file: expected.file,
+      container: loaded.media.container,
+      codec: loaded.track.codec,
+      consumedFrames: played.diagnostics.consumedFrames,
+    });
+  }
+
+  const wma = await refusal(player, await fixture('audio-wma.wma'));
+  assert(wma?.name === 'UnsupportedCodecError', `WMA refusal name mismatch (${wma?.name}).`);
+  assert(wma?.code === 'ERR_DEMUX_WMA_REFUSED', `WMA refusal code mismatch (${wma?.code}).`);
+  assert(wma.message.includes('WMA'), 'WMA refusal omitted the codec name.');
+
+  const fallback = createNakliAmpEngine({ version: 'test-m0', forcePath: 'r2' });
+  const fallbackMetadata = await fallback.load(await fixture('audio-mp3.mp3'));
+  assert(fallbackMetadata.path === 'r2', 'Forced native fallback did not select R2.');
+  assert(fallback.state().honesty.gapless === false, 'R2 did not disclose missing gapless playback.');
+  assert(fallback.state().honesty.decode === 'browser native audio', 'R2 honesty path mismatch.');
+  await fallback.play();
+  await waitFor(() => fallback.state().clock.positionS > 0.1, 'R2 native clock did not advance.');
+  fallback.pause();
+
+  player.destroy();
+  fallback.destroy();
+  return { cases: reports, refusal: wma, fallback: fallbackMetadata.path };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp golden audio';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = [error.stack || String(error), error.cause?.stack].filter(Boolean).join('\ncaused by: ');
+  document.title = 'FAIL — NakliAmp golden audio';
+});
+</script>
+</body>
+</html>
