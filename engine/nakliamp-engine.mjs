@@ -50,9 +50,13 @@ function eventHub(externalEvents) {
     const entry = { type, detail: structuredClone(detail), atMs: performance.now() };
     history.push(entry);
     if (history.length > 100) history.shift();
-    for (const listener of listeners.get(type) || []) listener(entry.detail);
-    for (const listener of listeners.get('*') || []) listener(entry);
-    externalEvents?.emit?.(type, entry.detail);
+    for (const listener of listeners.get(type) || []) {
+      try { listener(structuredClone(entry.detail)); } catch (_) {}
+    }
+    for (const listener of listeners.get('*') || []) {
+      try { listener(structuredClone(entry)); } catch (_) {}
+    }
+    try { externalEvents?.emit?.(type, structuredClone(entry.detail)); } catch (_) {}
   }
   function on(type, listener) {
     if (!listeners.has(type)) listeners.set(type, new Set());
@@ -188,12 +192,17 @@ export function createNakliAmpEngine({
   }
 
   function disposeNative() {
-    nativeAudio?.pause();
-    if (nativeAudio) nativeAudio.removeAttribute('src');
-    nativeAudio?.load();
+    try { nativeAudio?.pause(); } catch (_) {}
+    try { nativeAudio?.removeAttribute?.('src'); } catch (_) {}
+    try { nativeAudio?.load(); } catch (_) {}
     if (nativeUrl) URL.revokeObjectURL(nativeUrl);
     nativeAudio = null;
     nativeUrl = null;
+  }
+
+  function disposeNativeCandidate(audio, url) {
+    try { audio?.pause?.(); } catch (_) {}
+    URL.revokeObjectURL(url);
   }
 
   function recordError(error) {
@@ -228,7 +237,7 @@ export function createNakliAmpEngine({
       codec: track.codec,
       path: mode,
     });
-    return { ...metadata, audioTrack: track, path: mode };
+    return structuredClone({ ...metadata, audioTrack: track, path: mode });
   }
 
   async function loadR2(input, loadId) {
@@ -238,30 +247,22 @@ export function createNakliAmpEngine({
     const mime = nativeMime(file);
     const candidateUrl = URL.createObjectURL(file);
     let candidateAudio;
+    let adopted = false;
     try {
       candidateAudio = nativeAudioFactory({ url: candidateUrl, file, metadata });
-    } catch (error) {
-      URL.revokeObjectURL(candidateUrl);
-      throw error;
-    }
-    if (!candidateAudio || typeof candidateAudio.play !== 'function') {
-      URL.revokeObjectURL(candidateUrl);
-      throw new TypeError('nativeAudioFactory must return an audio-like playback object.');
-    }
-    if (mime && typeof candidateAudio.canPlayType === 'function' && !candidateAudio.canPlayType(mime)) {
-      URL.revokeObjectURL(candidateUrl);
-      throw new NakliAmpError(
-        'NativeCodecUnsupportedError',
-        'ERR_NAKLIAMP_NATIVE_UNSUPPORTED',
-        `The browser native audio path does not support ${track.codec || extensionOf(file.name) || 'this codec'}.`,
-      );
-    }
-    try {
+      if (!candidateAudio || typeof candidateAudio.play !== 'function') {
+        throw new TypeError('nativeAudioFactory must return an audio-like playback object.');
+      }
+      if (mime && typeof candidateAudio.canPlayType === 'function' && !candidateAudio.canPlayType(mime)) {
+        throw new NakliAmpError(
+          'NativeCodecUnsupportedError',
+          'ERR_NAKLIAMP_NATIVE_UNSUPPORTED',
+          `The browser native audio path does not support ${track.codec || extensionOf(file.name) || 'this codec'}.`,
+        );
+      }
       await waitForNativeMetadata(candidateAudio, DEFAULT_CONFIG.demux.probeTimeoutMs);
       const nextFingerprint = await fingerprint(file);
       if (loadId !== latestLoadId) {
-        URL.revokeObjectURL(candidateUrl);
-        candidateAudio.pause();
         throw new NakliAmpError(
           'SupersededLoadError',
           'ERR_NAKLIAMP_LOAD_SUPERSEDED',
@@ -281,18 +282,16 @@ export function createNakliAmpEngine({
       mode = 'r2';
       status = 'ready';
       lastError = null;
+      adopted = true;
       events.emit('track:loaded', {
         name: nativeMetadata.name,
         container: metadata.container,
         codec: track.codec,
         path: mode,
       });
-      return { ...nativeMetadata, audioTrack: track, path: mode };
+      return structuredClone({ ...nativeMetadata, audioTrack: track, path: mode });
     } catch (error) {
-      if (candidateAudio !== nativeAudio) {
-        candidateAudio.pause();
-        URL.revokeObjectURL(candidateUrl);
-      }
+      if (!adopted) disposeNativeCandidate(candidateAudio, candidateUrl);
       throw error;
     }
   }
@@ -357,7 +356,7 @@ export function createNakliAmpEngine({
     if (mode === 'r1') {
       const upstream = reel.state();
       const track = upstream.tracks.audio[upstream.tracks.selected.audio] || null;
-      return {
+      return structuredClone({
         version,
         status,
         path: mode,
@@ -378,11 +377,11 @@ export function createNakliAmpEngine({
           lastError: upstream.playback.lastError,
         },
         error: lastError,
-      };
+      });
     }
     if (mode === 'r2' && nativeAudio && nativeMetadata) {
       const track = nativeMetadata.tracks.find(candidate => candidate.type === 'audio') || null;
-      return {
+      return structuredClone({
         version,
         status: nativeAudio.paused ? (status === 'ready' ? 'ready' : 'paused') : 'playing',
         path: mode,
@@ -412,9 +411,9 @@ export function createNakliAmpEngine({
         },
         diagnostics: { consumedFrames: null, droppedFrames: null, lastError: null },
         error: lastError,
-      };
+      });
     }
-    return {
+    return structuredClone({
       version,
       status,
       path: mode,
@@ -424,7 +423,7 @@ export function createNakliAmpEngine({
       honesty: null,
       diagnostics: { consumedFrames: null, droppedFrames: null, lastError: null },
       error: lastError,
-    };
+    });
   }
 
   function destroy() {

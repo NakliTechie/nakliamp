@@ -56,6 +56,11 @@ async function run() {
     { file: 'audio-opus.mka', container: 'mkv', codec: 'opus', channels: 1 },
   ];
   const reports = [];
+  let attemptedEventMutation = false;
+  const stopMutationListener = player.on('track:loaded', detail => {
+    attemptedEventMutation = true;
+    detail.name = 'mutated-event-name';
+  });
 
   for (const expected of cases) {
     const metadata = await player.load(await fixture(expected.file));
@@ -68,6 +73,9 @@ async function run() {
     assert(loaded.media.fingerprint?.startsWith(`${loaded.media.size}-`), `${expected.file}: fingerprint missing.`);
     assert(loaded.honesty.decode === 'AudioDecoder', `${expected.file}: honesty path mismatch.`);
     assert(loaded.honesty.localOnly === true, `${expected.file}: local-only claim missing.`);
+    metadata.audioTrack.codec = 'mutated-load-codec';
+    metadata.tracks.find(track => track.type === 'audio').codec = 'mutated-load-track-codec';
+    assert(player.state().track.codec === expected.codec, `${expected.file}: load result aliases engine state.`);
 
     await player.play();
     await waitFor(() => player.state().clock.positionS > 0.15, `${expected.file}: audio clock did not advance.`);
@@ -83,6 +91,12 @@ async function run() {
       consumedFrames: played.diagnostics.consumedFrames,
     });
   }
+  stopMutationListener();
+  assert(attemptedEventMutation, 'Track event mutation listener did not run.');
+  assert(
+    player.eventHistory().filter(entry => entry.type === 'track:loaded').every(entry => entry.detail.name !== 'mutated-event-name'),
+    'Event listeners can mutate retained history.',
+  );
 
   const wma = await refusal(player, await fixture('audio-wma.wma'));
   assert(wma?.name === 'UnsupportedCodecError', `WMA refusal name mismatch (${wma?.name}).`);

@@ -63,6 +63,30 @@ try {
 } catch (_) {}
 assert(!leakedUrlFetchSucceeded, 'The failed R2 factory leaked a fetchable object URL.');
 
+let canPlayThrowUrl = null;
+const canPlayThrowPlayer = createNakliAmpEngine({
+  forcePath: 'r2',
+  nativeAudioFactory({ url }) {
+    canPlayThrowUrl = url;
+    const audio = new FakeAudio();
+    audio.canPlayType = () => { throw new Error('canPlayType sentinel'); };
+    return audio;
+  },
+});
+let canPlayError = null;
+try {
+  await canPlayThrowPlayer.load(mp3);
+} catch (error) {
+  canPlayError = error;
+}
+assert(canPlayError?.message === 'canPlayType sentinel', 'The canPlayType failure changed identity.');
+let canPlayThrowFetchSucceeded = false;
+try {
+  const response = await fetch(canPlayThrowUrl);
+  canPlayThrowFetchSucceeded = response.ok;
+} catch (_) {}
+assert(!canPlayThrowFetchSucceeded, 'The failed canPlayType check leaked a fetchable object URL.');
+
 const racePlayer = createNakliAmpEngine({
   forcePath: 'r2',
   nativeAudioFactory: () => new FakeAudio(),
@@ -76,6 +100,8 @@ const olderHandle = {
 const olderLoad = racePlayer.load(olderHandle);
 await new Promise(resolve => setTimeout(resolve, 0));
 const newerMetadata = await racePlayer.load(mp3);
+newerMetadata.audioTrack.codec = 'mutated-load-codec';
+newerMetadata.tracks[0].codec = 'mutated-load-track-codec';
 rejectOlder(new Error('older handle sentinel'));
 let olderError = null;
 try {
@@ -87,8 +113,14 @@ assert(newerMetadata.path === 'r2', 'The newer R2 media did not load.');
 assert(olderError?.code === 'ERR_NAKLIAMP_LOAD_SUPERSEDED', `Older failure code mismatch (${olderError?.code}).`);
 assert(racePlayer.state().status === 'ready', `Older failure contaminated status (${racePlayer.state().status}).`);
 assert(racePlayer.state().media.name === 'audio-mp3.mp3', 'Older failure replaced the newer media.');
+const publicState = racePlayer.state();
+publicState.track.codec = 'mutated-public-codec';
+publicState.media.name = 'mutated-public-name';
+assert(racePlayer.state().track.codec === 'mp3', 'Public R2 track state aliases engine metadata.');
+assert(racePlayer.state().media.name === 'audio-mp3.mp3', 'Public R2 media state aliases engine metadata.');
 
 throwingFactoryPlayer.destroy();
+canPlayThrowPlayer.destroy();
 racePlayer.destroy();
 
-console.log('PASS — R2 sessions: factory URL cleanup; stale rejection isolation');
+console.log('PASS — R2 sessions: exception-safe URL cleanup; stale rejection isolation; detached public state');
