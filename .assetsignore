@@ -1,0 +1,10 @@
+*
+!index.html
+!VENDOR.md
+!engine/
+!engine/nakliamp-engine.mjs
+!engine/reel-engine.mjs
+!vendor/
+!vendor/mediabunny/
+!vendor/mediabunny/LICENSE-MPL-2.0.txt
+!vendor/mediabunny/mediabunny-1.51.0.min.mjs

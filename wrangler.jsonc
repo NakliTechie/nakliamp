@@ -1,0 +1,14 @@
+{
+  "name": "nakliamp",
+  "compatibility_date": "2026-07-21",
+  "workers_dev": false,
+  "assets": {
+    "directory": "./"
+  },
+  "routes": [
+    {
+      "pattern": "nakliamp.naklitechie.com",
+      "custom_domain": true
+    }
+  ]
+}

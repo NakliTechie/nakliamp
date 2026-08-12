@@ -15,6 +15,9 @@ Reel engine with `AudioDecoder` and Web Audio. Browsers without `AudioDecoder`
 use their native audio path when the codec is supported. The honesty strip names
 the active path and states when gapless playback is unavailable.
 
+The public M0 build is a preview. The committed release gate is Chromium-only.
+Safari and Firefox behavior is not release evidence for this milestone.
+
 The library, metadata scanner, queue, playlists, EQ, compact player, Media
 Session integration, sidecar, and agent face remain later milestones.
 
@@ -39,4 +42,24 @@ Run the committed checks from the repository root:
 
 ```sh
 ./scripts/verify-browser.sh
+```
+
+## Publication
+
+The standalone preview deploys as Cloudflare Worker Static Assets at
+<https://nakliamp.naklitechie.com/>. The public package contains only the app,
+the NakliAmp and pinned Reel engine modules, the Mediabunny runtime and license,
+and the corresponding-source notice in `VENDOR.md`.
+
+Validate the package without changing Cloudflare state:
+
+```sh
+node scripts/verify-delivery.mjs
+wrangler deploy --dry-run
+```
+
+After starting `wrangler dev`, verify the served boundary with:
+
+```sh
+node scripts/verify-deployment.mjs http://127.0.0.1:8787/
 ```
