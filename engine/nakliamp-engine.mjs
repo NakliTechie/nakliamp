@@ -33,15 +33,45 @@ const DEFAULT_CONFIG = Object.freeze({
 
 const MIME_BY_EXTENSION = Object.freeze({
   mp3: 'audio/mpeg',
+  mp2: 'audio/mpeg',
+  mpga: 'audio/mpeg',
   flac: 'audio/flac',
   m4a: 'audio/mp4',
+  m4b: 'audio/mp4',
+  m4r: 'audio/mp4',
+  mp4: 'audio/mp4',
   aac: 'audio/aac',
+  adts: 'audio/aac',
   ogg: 'audio/ogg',
+  oga: 'audio/ogg',
   opus: 'audio/ogg; codecs=opus',
+  spx: 'audio/ogg',
   wav: 'audio/wav',
   wave: 'audio/wav',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff',
+  aifc: 'audio/aiff',
+  caf: 'audio/x-caf',
   mka: 'audio/x-matroska',
+  mkv: 'video/x-matroska',
+  weba: 'audio/webm',
+  webm: 'audio/webm',
+  '3gp': 'audio/3gpp',
+  amr: 'audio/amr',
 });
+
+/**
+ * Errors that must not trigger the R1 to R2 fallback.
+ * Two reasons: a superseded load is not a failure, and a named refusal is a
+ * true statement about the file that a second attempt would only obscure.
+ */
+const FALLBACK_BLOCKED = Object.freeze(new Set([
+  'ERR_NAKLIAMP_LOAD_SUPERSEDED',
+  'ERR_ENGINE_LOAD_SUPERSEDED',
+  'ERR_NAKLIAMP_NO_AUDIO',
+  'ERR_DEMUX_WMA_REFUSED',
+  'ERR_DEMUX_APE_REFUSED',
+]));
 
 function eventHub(externalEvents) {
   const listeners = new Map();
@@ -132,7 +162,13 @@ function waitForNativeMetadata(audio, timeoutMs) {
   });
 }
 
-function assertAudioOnly(metadata) {
+/**
+ * Pick the audio track to play.
+ * Only a file with no audio at all is refused. A file that also carries video
+ * is played for its audio: people throw music videos and rips at a music
+ * player, and refusing them serves nobody.
+ */
+function selectAudioTrack(metadata) {
   const audioTrack = metadata.tracks.find(track => track.type === 'audio');
   if (!audioTrack) {
     throw new NakliAmpError(
@@ -141,14 +177,28 @@ function assertAudioOnly(metadata) {
       'NakliAmp could not find an audio track in this file.',
     );
   }
-  if (metadata.tracks.some(track => track.type === 'video')) {
-    throw new NakliAmpError(
-      'VideoMediaRefusedError',
-      'ERR_NAKLIAMP_VIDEO_MEDIA',
-      'NakliAmp accepts audio files; open video media in Reel.',
-    );
-  }
   return audioTrack;
+}
+
+function hasVideoTrack(metadata) {
+  return metadata.tracks.some(track => track.type === 'video');
+}
+
+/**
+ * Minimal metadata for a file the engine could not probe.
+ * The browser is then the only judge of whether it plays, which is the point:
+ * an unrecognised container is not the same thing as an unplayable one.
+ */
+function unprobedMetadata(file) {
+  const extension = extensionOf(file.name);
+  return {
+    name: file.name || 'Untitled track',
+    size: file.size,
+    duration: null,
+    container: extension || null,
+    mimeType: file.type || MIME_BY_EXTENSION[extension] || null,
+    tracks: [{ type: 'audio', codec: null, sampleRate: null, channels: null }],
+  };
 }
 
 export function createNakliAmpEngine({
@@ -184,6 +234,7 @@ export function createNakliAmpEngine({
   let nativeFingerprint = null;
   let lastError = null;
   let latestLoadId = 0;
+  let fellBackFrom = null;
 
   function preferredMode() {
     if (forcePath === 'r1') return 'r1';
@@ -224,7 +275,14 @@ export function createNakliAmpEngine({
         'A newer track selection replaced this request.',
       );
     }
-    const track = assertAudioOnly(metadata);
+    const track = selectAudioTrack(metadata);
+    if (hasVideoTrack(metadata)) {
+      throw new NakliAmpError(
+        'VideoMediaDeferredError',
+        'ERR_NAKLIAMP_VIDEO_MEDIA',
+        'This file carries video; NakliAmp plays its audio on the native path.',
+      );
+    }
     disposeNative();
     mode = 'r1';
     status = 'ready';
@@ -242,8 +300,20 @@ export function createNakliAmpEngine({
 
   async function loadR2(input, loadId) {
     const file = await localFile(input);
-    const metadata = await reel.probe(file);
-    const track = assertAudioOnly(metadata);
+    // The native path must not depend on the engine understanding the file.
+    // If it did, any container the engine has never heard of would be a dead
+    // end even when the browser can play it perfectly well.
+    let metadata;
+    let probeFailure = null;
+    try {
+      metadata = await reel.probe(file);
+    } catch (error) {
+      if (FALLBACK_BLOCKED.has(error?.code)) throw error;
+      probeFailure = error;
+      metadata = unprobedMetadata(file);
+    }
+    const track = selectAudioTrack(metadata);
+    const videoIgnored = hasVideoTrack(metadata);
     const mime = nativeMime(file);
     const candidateUrl = URL.createObjectURL(file);
     let candidateAudio;
@@ -275,8 +345,10 @@ export function createNakliAmpEngine({
       nativeUrl = candidateUrl;
       nativeMetadata = {
         ...metadata,
+        videoIgnored,
         name: file.name || metadata.name,
         duration: Number.isFinite(candidateAudio.duration) ? candidateAudio.duration : metadata.duration,
+        unprobed: Boolean(probeFailure),
       };
       nativeFingerprint = nextFingerprint;
       mode = 'r2';
@@ -299,10 +371,31 @@ export function createNakliAmpEngine({
   async function load(input) {
     const loadId = ++latestLoadId;
     status = 'loading';
+    fellBackFrom = null;
     const nextMode = preferredMode();
     try {
       return nextMode === 'r1' ? await loadR1(input, loadId) : await loadR2(input, loadId);
     } catch (error) {
+      // R1 to R2 fallback. Without it, anything the engine cannot demux is a
+      // dead end even when the browser itself could play the file — the single
+      // largest gap between "an engine proof" and "throw anything at it".
+      if (nextMode === 'r1'
+        && forcePath === 'auto'
+        && loadId === latestLoadId
+        && !FALLBACK_BLOCKED.has(error?.code)) {
+        try {
+          const loaded = await loadR2(input, loadId);
+          fellBackFrom = error?.code ?? 'ERR_NAKLIAMP_R1_FAILED';
+          events.emit('playback:fallback', { from: 'r1', to: 'r2', code: fellBackFrom });
+          return { ...loaded, fellBackFrom };
+        } catch (fallbackError) {
+          // Report the failure the person can act on: if the native path also
+          // refused, its reason is the specific one.
+          if (loadId !== latestLoadId) throw fallbackError;
+          recordError(fallbackError);
+          throw fallbackError;
+        }
+      }
       if (loadId !== latestLoadId) {
         throw new NakliAmpError(
           'SupersededLoadError',
@@ -370,6 +463,8 @@ export function createNakliAmpEngine({
           output: 'AudioWorklet · Web Audio',
           gapless: null,
           localOnly: true,
+          fellBackFrom: null,
+          videoIgnored: false,
         },
         diagnostics: {
           consumedFrames: upstream.playback.audio.consumedFrames,
@@ -404,10 +499,14 @@ export function createNakliAmpEngine({
         honesty: {
           container: nativeMetadata.container,
           codec: track?.codec || null,
-          decode: 'browser native audio',
+          decode: nativeMetadata.unprobed ? 'browser native audio (container unrecognised)' : 'browser native audio',
           output: 'native audio element',
           gapless: false,
           localOnly: true,
+          // Both facts the strip must state rather than hide: why this file is
+          // not on the engine path, and that a video track went unplayed.
+          fellBackFrom,
+          videoIgnored: Boolean(nativeMetadata.videoIgnored),
         },
         diagnostics: { consumedFrames: null, droppedFrames: null, lastError: null },
         error: lastError,

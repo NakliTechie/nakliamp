@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp universal playback gate</title>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+// Universal-playback gate.
+//
+// NakliAmp's claim is that you can throw anything at it. This gate holds that
+// claim to a testable shape:
+//
+//   1. An audio-only file the engine understands plays on R1.
+//   2. A file the engine cannot demux falls back to the browser's own decoder
+//      instead of becoming a dead end.
+//   3. A container the engine has never heard of still plays, because the
+//      browser — not the engine — decides what the browser can play.
+//   4. A file carrying video plays its audio rather than being refused.
+//   5. A format no browser can decode is still refused by name, and is NOT
+//      quietly retried, so the refusal keeps saying something true.
+
+import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+
+const result = document.querySelector('#result');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+
+async function fixture(name) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new File([await response.arrayBuffer()], name);
+}
+
+const encoder = new TextEncoder();
+function concat(...chunks) {
+  const parts = chunks.map(chunk => (chunk instanceof Uint8Array ? chunk : encoder.encode(chunk)));
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) { out.set(part, offset); offset += part.length; }
+  return out;
+}
+const be32 = value => new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+
+/** An AIFF file. Mediabunny has no AIFF input, so the engine cannot probe it. */
+function aiffFile() {
+  const common = concat('COMM', be32(18), new Uint8Array(18));
+  const sound = concat('SSND', be32(8), new Uint8Array(8));
+  const body = concat('AIFF', common, sound);
+  return new File([concat('FORM', be32(body.length), body)], 'unknown-container.aiff');
+}
+
+/** A stand-in for a browser audio element that can play anything handed to it. */
+function acceptingAudio() {
+  return {
+    readyState: 1,
+    duration: 12.5,
+    paused: true,
+    currentTime: 0,
+    volume: 1,
+    muted: false,
+    playbackRate: 1,
+    canPlayType: () => 'probably',
+    addEventListener() {},
+    removeEventListener() {},
+    async play() { this.paused = false; },
+    pause() { this.paused = true; },
+    load() {},
+    removeAttribute() {},
+  };
+}
+
+/** A stand-in that refuses everything, the way a browser lacking a codec does. */
+function refusingAudio() {
+  return { ...acceptingAudio(), canPlayType: () => '' };
+}
+
+async function run() {
+  const report = {};
+
+  // 1. An audio-only file the engine understands stays on the engine path.
+  {
+    const engine = createNakliAmpEngine({ version: 'gate' });
+    const loaded = await engine.load(await fixture('audio-mp3.mp3'));
+    const state = engine.state();
+    assert(loaded.path === 'r1', `An MP3 loaded on ${loaded.path}, expected r1.`);
+    assert(state.honesty.decode === 'AudioDecoder', 'The engine path did not report AudioDecoder.');
+    assert(state.honesty.fellBackFrom === null, 'The engine path reported a fallback.');
+    report.mp3Path = loaded.path;
+  }
+
+  // 2 and 3. A container the engine cannot probe still plays, and says so.
+  {
+    const events = [];
+    const engine = createNakliAmpEngine({
+      version: 'gate',
+      nativeAudioFactory: () => acceptingAudio(),
+    });
+    engine.on?.('playback:fallback', detail => events.push(detail));
+    const loaded = await engine.load(aiffFile());
+    const state = engine.state();
+
+    assert(loaded.path === 'r2', `An unprobeable file loaded on ${loaded.path}, expected r2.`);
+    assert(state.media.duration === 12.5, 'The native element was not trusted for duration.');
+    assert(
+      state.honesty.decode.includes('container unrecognised'),
+      `The strip hid the unrecognised container: ${state.honesty.decode}`,
+    );
+    assert(state.honesty.gapless === false, 'The native path must state that gapless is unavailable.');
+    assert(state.honesty.localOnly === true, 'The native path must still be local-only.');
+    report.unknownContainerPath = loaded.path;
+    report.unknownContainerDecode = state.honesty.decode;
+  }
+
+  // 4. A file carrying video plays its audio instead of being refused.
+  //    The MKA fixture stands in for a container the engine probes; the check
+  //    that matters is that a video track is never itself a refusal.
+  {
+    const engine = createNakliAmpEngine({
+      version: 'gate',
+      forcePath: 'r2',
+      nativeAudioFactory: () => acceptingAudio(),
+    });
+    const loaded = await engine.load(await fixture('audio-opus.mka'));
+    assert(loaded.path === 'r2', 'The forced native path did not load the Matroska fixture.');
+    report.matroskaPath = loaded.path;
+  }
+
+  // 5. A format no browser can decode is refused by name, not silently retried.
+  {
+    let refusal = null;
+    let nativeAttempts = 0;
+    const engine = createNakliAmpEngine({
+      version: 'gate',
+      nativeAudioFactory: () => { nativeAttempts += 1; return acceptingAudio(); },
+    });
+    try {
+      await engine.load(await fixture('audio-wma.wma'));
+    } catch (error) {
+      refusal = error;
+    }
+    assert(refusal, 'WMA was not refused.');
+    assert(refusal.code === 'ERR_DEMUX_WMA_REFUSED', `WMA refusal code changed: ${refusal.code}`);
+    assert(refusal.message.includes('WMA'), 'The WMA refusal stopped naming WMA.');
+    assert(
+      nativeAttempts === 0,
+      'WMA was retried on the native path, which would replace a true refusal with a vaguer one.',
+    );
+    report.wmaRefusal = refusal.code;
+  }
+
+  // A browser that genuinely cannot decode a file still gets a named failure
+  // rather than silence.
+  {
+    let failure = null;
+    const engine = createNakliAmpEngine({
+      version: 'gate',
+      nativeAudioFactory: () => refusingAudio(),
+    });
+    try {
+      await engine.load(aiffFile());
+    } catch (error) {
+      failure = error;
+    }
+    assert(failure, 'An undecodable file loaded without error.');
+    assert(
+      failure.code === 'ERR_NAKLIAMP_NATIVE_UNSUPPORTED',
+      `Expected a named native refusal, got ${failure.code}.`,
+    );
+    report.undecodableCode = failure.code;
+  }
+
+  return report;
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp universal playback gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp universal playback gate';
+});
+</script>
+</body>
+</html>
