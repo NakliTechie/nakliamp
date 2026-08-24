@@ -68,6 +68,33 @@ async function run() {
   assert(doc.querySelector('#refusal-message').textContent.includes('WMA'), 'Refusal message omitted WMA.');
   assert(doc.querySelector('#path-chip').textContent.includes('R4'), 'R4 refusal chip did not render.');
 
+  // The visualiser: every mode must render against real playback without
+  // throwing, and switching modes must not leave a frame callback running.
+  {
+    const vis = harness.visualiser();
+    assert(vis.modes >= 12, `only ${vis.modes} visualiser modes registered`);
+    assert(doc.querySelector('#vis'), 'The visualiser canvas is missing.');
+    assert(!doc.querySelector('#vis-wrap').hidden, 'The visualiser is hidden by default.');
+
+    await harness.open(await fixture('audio-mp3.mp3', app.File));
+    await harness.play();
+    for (const { id } of [...doc.querySelector('#vis-mode').options].map(option => ({ id: option.value }))) {
+      harness.setVisualiserMode(id);
+      await new Promise(resolve => setTimeout(resolve, 45));
+      const state = harness.visualiser();
+      assert(state.mode === id, `mode ${id} did not apply (got ${state.mode})`);
+      assert(
+        id === 'none' ? !state.running : state.running,
+        `mode ${id} running state is wrong (${state.running})`,
+      );
+    }
+    harness.setVisualiserMode('bars');
+    assert(harness.toggleFullVisualiser() === true, 'Full window did not engage.');
+    assert(doc.querySelector('#vis-wrap').classList.contains('full'), 'Full window class missing.');
+    assert(harness.toggleFullVisualiser() === false, 'Full window did not release.');
+    harness.pause();
+  }
+
   // The library screen, which the rest of this harness never reaches. A folder
   // grant needs a user gesture that headless cannot give, so this asserts the
   // screen opens, explains itself, and throws nothing on the way.
