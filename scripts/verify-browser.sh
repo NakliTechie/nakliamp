@@ -77,7 +77,7 @@ for diagnostic_marker in L7_DECLARED_FAILURE L7_CONSOLE_SENTINEL l7-network-sent
   fi
 done
 
-for harness in golden-audio ui-smoke; do
+for harness in golden-audio ui-smoke library; do
   profile_path="$profile_root/chrome-$harness"
   verify_run=1
   while [ "$verify_run" -le "$verify_repeats" ]; do

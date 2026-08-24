@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp library scan gate</title>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+// M1 scan gate.
+//
+// Drives the scan pipeline over a synthetic 1000-track folder and asserts the
+// three properties M1 commits to: the scan stays inside the long-task budget,
+// rescanning the same folder reproduces the same index hash, and playback state
+// survives a rescan.
+//
+// The folder is synthetic because a real grant needs a user gesture, and a
+// handle carrying methods cannot cross into a worker. The pipeline under test
+// is exactly the one the worker runs.
+
+import { scanFolder } from '../app/library/scan-core.mjs';
+import {
+  clearLibrary, allTracks, trackCount, indexHash, getTrack, trackId,
+  updateTrackState, getArt, groupAlbums, groupArtists,
+} from '../app/library/store.mjs';
+
+const result = document.querySelector('#result');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+// -------------------------------------------------- synthetic fixtures ----
+
+const encoder = new TextEncoder();
+
+function concat(...chunks) {
+  const parts = chunks.map(chunk => (chunk instanceof Uint8Array ? chunk : encoder.encode(chunk)));
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) { out.set(part, offset); offset += part.length; }
+  return out;
+}
+const u8 = (...values) => new Uint8Array(values);
+const be24 = value => u8((value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+const be32 = value => u8((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+const le32 = value => u8(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+
+function vorbisComment(entries) {
+  const vendor = encoder.encode('NakliAmp gate');
+  const encoded = entries.map(entry => encoder.encode(entry));
+  return concat(
+    le32(vendor.length), vendor, le32(encoded.length),
+    ...encoded.flatMap(entry => [le32(entry.length), entry]),
+  );
+}
+
+/** A FLAC file with just the two metadata blocks the parser reads. */
+function flacFile({ title, artist, album, trackNo, year }) {
+  const streamInfo = new Uint8Array(34);
+  streamInfo[10] = (44100 >> 12) & 0xff;
+  streamInfo[11] = (44100 >> 4) & 0xff;
+  streamInfo[12] = ((44100 & 0x0f) << 4) | (1 << 1);
+  streamInfo.set(be32(220500), 14); // five seconds
+  const comment = vorbisComment([
+    `TITLE=${title}`, `ARTIST=${artist}`, `ALBUM=${album}`,
+    `ALBUMARTIST=${artist}`, `TRACKNUMBER=${trackNo}`, `DATE=${year}`, 'GENRE=Test',
+  ]);
+  return concat(
+    'fLaC',
+    u8(0), be24(streamInfo.length), streamInfo,
+    u8(0x80 | 4), be24(comment.length), comment,
+  );
+}
+
+/** A directory handle good enough for the pipeline: kind, entries(), getFile(). */
+function directory(name, children) {
+  return {
+    kind: 'directory',
+    name,
+    entries() { return Object.entries(children)[Symbol.iterator](); },
+  };
+}
+
+function fileHandle(name, bytes, lastModified) {
+  return {
+    kind: 'file',
+    name,
+    async getFile() {
+      return new File([bytes], name, { type: 'audio/flac', lastModified });
+    },
+  };
+}
+
+const ALBUM_COUNT = 100;
+const TRACKS_PER_ALBUM = 10;
+const TOTAL = ALBUM_COUNT * TRACKS_PER_ALBUM;
+
+function buildLibrary({ modifiedAt = 1_000_000 } = {}) {
+  const albums = {};
+  for (let albumIndex = 0; albumIndex < ALBUM_COUNT; albumIndex += 1) {
+    const artist = `Artist ${albumIndex % 25}`;
+    const album = `Album ${albumIndex}`;
+    const tracks = {};
+    for (let trackIndex = 1; trackIndex <= TRACKS_PER_ALBUM; trackIndex += 1) {
+      const name = `${String(trackIndex).padStart(2, '0')} Track.flac`;
+      tracks[name] = fileHandle(name, flacFile({
+        title: `Track ${trackIndex} of ${album}`,
+        artist, album, trackNo: trackIndex, year: 1990 + (albumIndex % 30),
+      }), modifiedAt);
+    }
+    albums[album] = directory(album, tracks);
+  }
+  return directory('Music', albums);
+}
+
+// ------------------------------------------------------------- gate ----
+
+async function run() {
+  await clearLibrary();
+
+  // Watch every long task the scan produces. M1 budgets main-thread jank, and
+  // this pipeline runs on the main thread here, so the budget applies directly.
+  const longTasks = [];
+  let observer = null;
+  if (typeof PerformanceObserver === 'function'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+    observer = new PerformanceObserver(list => longTasks.push(...list.getEntries()));
+    observer.observe({ entryTypes: ['longtask'] });
+  }
+
+  const root = buildLibrary();
+  const progress = [];
+  const firstScan = await scanFolder(root, { post: message => progress.push(message) });
+  observer?.disconnect();
+
+  assert(firstScan.type === 'done', 'The scan did not report done.');
+  assert(firstScan.failed === 0, `The scan reported ${firstScan.failed} unreadable files.`);
+  assert(firstScan.tracks === TOTAL, `Indexed ${firstScan.tracks} tracks, expected ${TOTAL}.`);
+  assert(await trackCount() === TOTAL, 'The index count does not match the scan summary.');
+  assert(progress.some(message => message.type === 'progress'), 'The scan reported no progress.');
+
+  const worstLongTask = longTasks.reduce((worst, entry) => Math.max(worst, entry.duration), 0);
+  assert(worstLongTask < 250, `A single task blocked for ${Math.round(worstLongTask)} ms.`);
+
+  // Tags parsed, not merely counted.
+  const sample = await getTrack(await trackId('Album 7/03 Track.flac'));
+  assert(sample, 'A known track is missing from the index.');
+  assert(sample.title === 'Track 3 of Album 7', `Title did not parse: ${sample.title}`);
+  assert(sample.artist === 'Artist 7', `Artist did not parse: ${sample.artist}`);
+  assert(sample.trackNo === 3, `Track number did not parse: ${sample.trackNo}`);
+  assert(sample.durationS === 5, `Duration did not parse: ${sample.durationS}`);
+  assert(sample.container === 'flac', `Container did not sniff: ${sample.container}`);
+
+  const albums = groupAlbums(await allTracks());
+  const artists = groupArtists(await allTracks());
+  assert(albums.length === ALBUM_COUNT, `Grouped ${albums.length} albums, expected ${ALBUM_COUNT}.`);
+  assert(artists.length === 25, `Grouped ${artists.length} artists, expected 25.`);
+
+  // The index hash is the M1 round-trip proof.
+  const firstHash = firstScan.hash;
+  assert(firstHash === await indexHash(await allTracks()), 'The reported hash does not match the index.');
+
+  // Playback state, which a rescan must carry forward and the hash must ignore.
+  await updateTrackState(sample.id, { resumePositionS: 42.5, playCount: 3, bookmarked: 1 });
+
+  const secondScan = await scanFolder(buildLibrary(), {});
+  assert(secondScan.tracks === TOTAL, `Rescan indexed ${secondScan.tracks} tracks.`);
+  assert(secondScan.hash === firstHash, 'Rescanning the same folder produced a different index hash.');
+  assert(secondScan.updated === 0, `Rescan rewrote ${secondScan.updated} unchanged tracks.`);
+  assert(secondScan.removed === 0, `Rescan removed ${secondScan.removed} tracks that still exist.`);
+
+  const afterRescan = await getTrack(sample.id);
+  assert(afterRescan.resumePositionS === 42.5, 'Rescan lost the resume position.');
+  assert(afterRescan.playCount === 3, 'Rescan lost the play count.');
+  assert(afterRescan.bookmarked === 1, 'Rescan lost the bookmark.');
+
+  // A changed file is re-read; an identical one is not.
+  const touched = await scanFolder(buildLibrary({ modifiedAt: 2_000_000 }), {});
+  assert(touched.updated === TOTAL, `A modified library rewrote ${touched.updated} tracks, expected ${TOTAL}.`);
+  assert(touched.hash === firstHash, 'Re-reading unchanged bytes changed the index hash.');
+  assert((await getTrack(sample.id)).resumePositionS === 42.5, 'Re-reading a file lost the resume position.');
+
+  // A deleted folder leaves the index.
+  const trimmed = directory('Music', Object.fromEntries(
+    [...buildLibrary().entries()].slice(0, ALBUM_COUNT - 1),
+  ));
+  const afterDelete = await scanFolder(trimmed, {});
+  assert(afterDelete.removed === TRACKS_PER_ALBUM,
+    `Deleting an album removed ${afterDelete.removed} rows, expected ${TRACKS_PER_ALBUM}.`);
+  assert(afterDelete.tracks === TOTAL - TRACKS_PER_ALBUM, 'The index kept rows for deleted files.');
+  assert(afterDelete.hash !== firstHash, 'Deleting an album did not change the index hash.');
+
+  // Art is only stored when a file actually carries a picture.
+  assert(await getArt(sample.artKey) === null, 'Art was stored for a track with no picture.');
+
+  await clearLibrary();
+  assert(await trackCount() === 0, 'Clearing the library left rows behind.');
+
+  return {
+    tracks: TOTAL,
+    albums: albums.length,
+    artists: artists.length,
+    hash: firstHash.slice(0, 16),
+    scanMs: firstScan.durationMs,
+    rescanMs: secondScan.durationMs,
+    longTasks: longTasks.length,
+    worstLongTaskMs: Math.round(worstLongTask),
+  };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp library scan gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp library scan gate';
+});
+</script>
+</body>
+</html>
