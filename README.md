@@ -101,7 +101,7 @@ corresponding-source notice in `VENDOR.md`.
 
 ## Vendored engine
 
-NakliAmp pins Reel commit `28e871525b766d1ae84790e150eb447cc396badc` and does
+NakliAmp pins Reel commit `e1fbff5432587bb194cb0e1a7d7efbaf1da7f13b` and does
 not patch it. Engine changes land upstream in Reel first and are pulled down.
 See `VENDOR.md` for file hashes and the corresponding-source notice. NakliAmp
 never imports Mediabunny directly; the pinned engine is the only ingress.
