@@ -40,11 +40,13 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 cd "$repo_root"
+node "$repo_root/scripts/verify-source-hygiene.mjs"
 node "$repo_root/scripts/verify-vendor.mjs"
 node "$repo_root/scripts/verify-fixtures.mjs"
 node "$repo_root/scripts/verify-boundary.mjs"
 node "$repo_root/scripts/verify-r2-sessions.mjs"
 node "$repo_root/scripts/verify-delivery.mjs"
+node --test "$repo_root/test/metadata.test.mjs" "$repo_root/test/store.test.mjs"
 "$python_bin" -m http.server "$verify_port" --bind "$verify_host" >"$profile_root/server.log" 2>&1 &
 server_pid=$!
 
