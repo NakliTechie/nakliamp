@@ -68,6 +68,26 @@ async function run() {
   assert(doc.querySelector('#refusal-message').textContent.includes('WMA'), 'Refusal message omitted WMA.');
   assert(doc.querySelector('#path-chip').textContent.includes('R4'), 'R4 refusal chip did not render.');
 
+  // The library screen, which the rest of this harness never reaches. A folder
+  // grant needs a user gesture that headless cannot give, so this asserts the
+  // screen opens, explains itself, and throws nothing on the way.
+  await harness.openLibrary();
+  assert(doc.querySelector('#library').classList.contains('on'), 'The library screen did not open.');
+  assert(doc.querySelector('#lib-list').children.length > 0, 'The library rendered no rows and no explanation.');
+  assert(
+    doc.querySelector('#lib-list').textContent.trim().length > 0,
+    'The empty library said nothing about what to do next.',
+  );
+  assert(harness.libraryTracks() === 0, 'The harness library was unexpectedly populated.');
+
+  doc.querySelector('#lib-search').value = 'nothing matches this';
+  doc.querySelector('#lib-search').dispatchEvent(new app.Event('input'));
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert(doc.querySelector('#library').classList.contains('on'), 'Searching closed the library.');
+
+  doc.querySelector('#lib-close').click();
+  assert(!doc.querySelector('#library').classList.contains('on'), 'Closing the library did nothing.');
+
   return {
     version: doc.querySelector('.version').textContent,
     path: 'R1',

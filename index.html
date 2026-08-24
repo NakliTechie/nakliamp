@@ -191,7 +191,7 @@ import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } 
 import { searchTracks } from './app/library/search.mjs';
 import {
   supportsFolderGrant, requestFolder, storedFolder, grantState, reclaimFolder,
-  forgetFolder, startScan, lastScan,
+  forgetFolder, startScan,
 } from './app/library/scan.mjs';
 
 const STRINGS = Object.freeze({
@@ -582,13 +582,15 @@ async function runScan(handle) {
 
 async function openLibrary({ prompt = false } = {}) {
   show('library');
+  // Always render first, so the screen explains itself whatever happens next.
+  // Every early return below would otherwise leave an empty bordered box.
+  await refreshLibrary();
   if (!supportsFolderGrant()) { reportScan(t('library.nogrant')); return; }
 
   let handle = await storedFolder();
   if (handle) {
     // A grant revoked between sessions is expected, not an error. The index is
     // still readable, so the library shows while the grant is reclaimed.
-    await refreshLibrary();
     if (await grantState(handle) !== 'granted') {
       if (!prompt) { reportScan('Reopen the folder to rescan. Your indexed tracks are still listed.'); return; }
       if (await reclaimFolder(handle) !== 'granted') { reportScan('The folder grant was not restored.'); return; }
@@ -599,8 +601,6 @@ async function openLibrary({ prompt = false } = {}) {
     if (!handle) { reportScan(t('library.none')); return; }
   }
 
-  const previous = await lastScan();
-  if (previous && libraryTracks.length) await refreshLibrary();
   await runScan(handle);
 }
 
@@ -672,6 +672,8 @@ addEventListener('pagehide', () => { rememberPosition(); releaseArt(); });
 if (new URLSearchParams(location.search).get('harness') === '1') {
   window.__nakliampHarness = Object.freeze({
     open: input => openMedia(input, { autoplay: false }),
+    openLibrary: () => openLibrary(),
+    libraryTracks: () => libraryTracks.length,
     state: () => engine.state(),
     play: () => engine.play(),
     pause: () => engine.pause(),
