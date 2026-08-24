@@ -69,7 +69,7 @@ const pagePolicy = index.match(/<meta http-equiv="Content-Security-Policy" conte
 assert(pagePolicy, 'The in-document Content-Security-Policy is missing.');
 assert(/connect-src 'self'/.test(pagePolicy), 'The page CSP permits an unexpected network destination.');
 assert(!/connect-src[^;]*https?:/.test(pagePolicy), 'The page CSP permits a remote HTTP connection.');
-assert(/<span class="version">v0\.1\.0-m0 · preview<\/span>/.test(index), 'The visible M0 preview label is missing.');
+assert(/<span class="version">v0\.2\.0-m1<\/span>/.test(index), 'The visible version label is missing.');
 
 assert(
   /Corresponding Mediabunny source is available[\s\S]*github\.com\/Vanilagy\/mediabunny\/tree\/v1\.51\.0/.test(vendor),

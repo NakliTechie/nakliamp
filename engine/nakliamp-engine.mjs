@@ -9,7 +9,7 @@ export class NakliAmpError extends Error {
 }
 
 const DEFAULT_CONFIG = Object.freeze({
-  version: '0.1.0-m0',
+  version: '0.2.0-m1',
   sync: { decodeAheadMs: 300, videoDropGraceMs: 20, audioRingSeconds: 1 },
   decode: {
     maxPacketsPerSample: 4096,

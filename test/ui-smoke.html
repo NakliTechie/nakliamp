@@ -45,8 +45,7 @@ async function run() {
 
   assert(doc.querySelector('#empty').classList.contains('on'), 'Empty state is not visible at boot.');
   assert(doc.body.textContent.includes('no analytics'), 'Sovereignty copy is missing.');
-  assert(doc.querySelector('.version').textContent.includes('0.1.0-m0'), 'Visible version is missing.');
-  assert(doc.querySelector('.version').textContent.includes('preview'), 'Visible preview label is missing.');
+  assert(doc.querySelector('.version').textContent.includes('0.2.0-m1'), 'Visible version is missing.');
 
   await harness.open(await fixture('audio-mp3.mp3', app.File));
   assert(doc.querySelector('#player').classList.contains('on'), 'Player state did not open.');
