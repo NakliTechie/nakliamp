@@ -225,7 +225,9 @@ function unprobedMetadata(file) {
  *
  *   { name, sniff(Uint8Array) -> string|null, decode(Uint8Array) -> Decoded }
  *
- * where Decoded is `{ sampleRate, channels: Float32Array[], frames }`.
+ * where Decoded is `{ sampleRate, channels: Float32Array[], frames }`. Both
+ * methods may return a promise, so a decoder that must instantiate a wasm
+ * module before it can answer is supported without the engine changing.
  */
 export function createNakliAmpEngine({
   version = DEFAULT_CONFIG.version,
@@ -555,13 +557,16 @@ export function createNakliAmpEngine({
     for (const decoder of softwareDecoders) {
       let container = null;
       try {
-        container = decoder.sniff(bytes);
+        container = await decoder.sniff(bytes);
       } catch (_) {
         container = null;
       }
       if (!container) continue;
       try {
-        decoded = { ...decoder.decode(bytes), decoderName: decoder.name, container };
+        // Awaited, so a decoder may be asynchronous. A wasm decoder has to
+        // instantiate its module before it can decode anything, and the
+        // in-house tier is unaffected: awaiting a plain value is a no-op.
+        decoded = { ...(await decoder.decode(bytes)), decoderName: decoder.name, container };
         break;
       } catch (error) {
         // A decoder that recognised the file and then failed has the most
