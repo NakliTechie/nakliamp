@@ -47,7 +47,11 @@ assert(
   /github\.com\/Vanilagy\/mediabunny\/tree\/v1\.51\.0/.test(html),
   'The artifact omits the Mediabunny corresponding-source location.',
 );
-assert(/28e871525b766d1ae84790e150eb447cc396badc/.test(html), 'The artifact omits the pinned Reel commit.');
+const pinned = /Reel commit: `([0-9a-f]{40})`/.exec(
+  await readFile(new URL('../VENDOR.md', import.meta.url), 'utf8'),
+)?.[1];
+assert(pinned, 'VENDOR.md does not name a pinned Reel commit.');
+assert(html.includes(pinned), 'The artifact omits the pinned Reel commit.');
 
 // The engine and its demuxer must actually be inside the file, not referenced.
 assert(/createNakliAmpEngine/.test(html), 'The artifact does not contain the NakliAmp core.');

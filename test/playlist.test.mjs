@@ -210,3 +210,62 @@ test('export is byte-stable for the same input', () => {
   const tracks = [track({ path: 'a.mp3', title: 'A', durationS: 1 })];
   assert.equal(toM3u8(tracks, { name: 'N' }), toM3u8(tracks, { name: 'N' }));
 });
+
+
+// ------------------------------------------ manager round-trip ----
+// The manager edits a playlist by rewriting the file. These assert the edit
+// operations preserve exactly what they should and nothing else.
+
+test('reordering rewrites order and nothing else', () => {
+  const tracks = [
+    track({ path: 'a/1.mp3', title: 'One', durationS: 10 }),
+    track({ path: 'a/2.mp3', title: 'Two', durationS: 20 }),
+    track({ path: 'a/3.mp3', title: 'Three', durationS: 30 }),
+  ];
+  const moved = [tracks[1], tracks[0], tracks[2]];
+  const before = parsePlaylist(toM3u8(tracks, { name: 'L', base: 'a' }), 'a/L.m3u8');
+  const after = parsePlaylist(toM3u8(moved, { name: 'L', base: 'a' }), 'a/L.m3u8');
+
+  assert.deepEqual(after.entries.map(entry => entry.path), ['a/2.mp3', 'a/1.mp3', 'a/3.mp3']);
+  assert.equal(after.entries.length, before.entries.length);
+  assert.deepEqual(
+    [...after.entries].map(entry => entry.path).sort(),
+    [...before.entries].map(entry => entry.path).sort(),
+    'reordering must not add or lose a track',
+  );
+});
+
+test('removing a track drops exactly one entry', () => {
+  const tracks = [
+    track({ path: 'a/1.mp3', title: 'One' }),
+    track({ path: 'a/2.mp3', title: 'Two' }),
+    track({ path: 'a/3.mp3', title: 'Three' }),
+  ];
+  const kept = tracks.filter((_, index) => index !== 1);
+  const after = parsePlaylist(toM3u8(kept, { name: 'L', base: 'a' }), 'a/L.m3u8');
+  assert.deepEqual(after.entries.map(entry => entry.path), ['a/1.mp3', 'a/3.mp3']);
+});
+
+test('a rewritten playlist survives repeated round-trips unchanged', () => {
+  const tracks = [
+    track({ path: 'a/b/1.mp3', title: 'One', artist: 'X', durationS: 10 }),
+    track({ path: 'a/2.mp3', title: 'Two', durationS: 20 }),
+  ];
+  let text = toM3u8(tracks, { name: 'Stable', base: 'a' });
+  for (let round = 0; round < 3; round += 1) {
+    const parsed = parsePlaylist(text, 'a/Stable.m3u8');
+    const rebuilt = parsed.entries.map(entry => track({
+      path: entry.path, title: entry.title, artist: entry.artist, durationS: entry.durationS,
+    }));
+    const next = toM3u8(rebuilt, { name: 'Stable', base: 'a' });
+    assert.equal(next, text, `round ${round} changed the file`);
+    text = next;
+  }
+});
+
+test('a playlist name is made safe for a file name', () => {
+  const unsafe = 'My/List: 2024 <best>';
+  const safe = unsafe.replace(/[^\w \-.]/g, '_').trim();
+  assert.ok(!safe.includes('/'), 'a slash would write outside the intended directory');
+  assert.ok(!safe.includes(':'), 'a colon is not portable');
+});

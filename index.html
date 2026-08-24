@@ -101,8 +101,22 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 .lib-row .who b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-row .who span{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-row .dur{font:11px var(--mono);color:var(--faint);flex:none}
+.row-tools{display:flex;gap:4px;flex:none}
+.row-tools button{width:24px;height:24px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;font:11px var(--mono);line-height:1;padding:0}
+.row-tools button:hover{border-color:var(--accent);color:var(--accent)}
 .lib-empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .lib-note{margin:14px 0 0;font-size:12px;color:var(--faint)}
+
+/* Visualiser */
+.vis-wrap{position:relative;margin:20px 0 0;border:1px solid var(--line);border-radius:11px;background:var(--panel);overflow:hidden}
+.vis-wrap[hidden]{display:none}
+#vis{display:block;width:100%;height:120px}
+.vis-bar{display:flex;align-items:center;gap:8px;padding:6px 9px;border-top:1px solid var(--line);background:var(--panel-2)}
+.vis-bar select{flex:1;min-height:32px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:11px var(--mono)}
+.vis-bar button{min-height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;font:10px var(--mono)}
+.vis-wrap.full{position:fixed;inset:0;z-index:50;margin:0;border-radius:0;border:0}
+.vis-wrap.full #vis{height:100vh}
+.vis-wrap.full .vis-bar{position:absolute;left:0;right:0;bottom:0;background:rgba(31,26,21,.86)}
 </style>
 </head>
 <body>
@@ -149,6 +163,13 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
             <button class="btn open-another" id="open-another" type="button" data-t="action.another">Open another</button>
             <button class="btn" id="show-library" type="button" data-t="action.library">Library</button>
           </div>
+          <div class="vis-wrap" id="vis-wrap">
+            <canvas id="vis" aria-label="Spectrum visualiser" role="img"></canvas>
+            <div class="vis-bar">
+              <select id="vis-mode" aria-label="Visualiser mode"></select>
+              <button id="vis-full" type="button" title="Full window (V)">Full</button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -162,6 +183,8 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
         <button class="btn primary" id="lib-reopen" type="button" hidden>Reopen folder</button>
         <select class="lib-search" id="lib-playlist" aria-label="Playlists" style="flex:0 1 200px" hidden></select>
         <button class="btn" id="lib-save" type="button">Save as playlist</button>
+        <button class="btn" id="lib-rename" type="button" hidden>Rename</button>
+        <button class="btn" id="lib-delete" type="button" hidden>Delete</button>
         <button class="btn" id="lib-rescan" type="button">Rescan</button>
         <button class="btn" id="lib-forget" type="button">Forget folder</button>
         <button class="btn" id="lib-close" type="button">Close</button>
@@ -191,6 +214,7 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 <script type="module">
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
 import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';
+import { createVisualiser } from './app/visualiser/driver.mjs';
 import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } from './app/library/store.mjs';
 import { searchTracks } from './app/library/search.mjs';
 import { allPlaylists } from './app/library/store.mjs';
@@ -325,6 +349,7 @@ function renderClock() {
     $('#play').textContent = state.clock.playing ? 'Ⅱ' : '▶';
     $('#play').setAttribute('aria-label', state.clock.playing ? 'Pause' : 'Play');
   }
+  if (state.path && state.clock.playing && !visualiser.running) visualiser.start();
   if (state.path && queueIndex >= 0 && state.media.duration
     && state.clock.positionS >= state.media.duration - 0.25 && !state.clock.playing) {
     if (!advancing) {
@@ -458,6 +483,9 @@ const KEYMAP = Object.freeze({
     $('#volume').value = String(next); engine.setVolume(next);
   },
   m: () => engine.setMuted(!engine.state().clock.muted),
+  v: () => { const id = visualiser.cycle(1); $('#vis-mode').value = id; localStorage.setItem('nakliamp:visualiser', id); },
+  V: () => toggleFullVisualiser(),
+  Escape: () => { if ($('#vis-wrap').classList.contains('full')) toggleFullVisualiser(); },
   l: () => openLibrary(),
   n: () => advance(1),
   p: () => advance(-1),
@@ -518,6 +546,8 @@ async function renderLibrary() {
   $('#lib-count').textContent = query
     ? `${visible.length} of ${source.length}`
     : `${source.length} track${source.length === 1 ? '' : 's'}`;
+  $('#lib-rename').hidden = !playlist;
+  $('#lib-delete').hidden = !playlist;
   if (playlist && missing) {
     reportScan(`${playlist.name}: ${missing} of ${playlist.entries.length} entries are not in this folder.`);
   }
@@ -574,6 +604,22 @@ async function renderLibrary() {
 
     row.append(number, cover, who, duration);
     item.append(row);
+    if (playlist) {
+      const tools = document.createElement('span');
+      tools.className = 'row-tools';
+      for (const [label, action, title] of [
+        ['\u2191', 'up', 'Move up'], ['\u2193', 'down', 'Move down'], ['\u00d7', 'remove', 'Remove from playlist'],
+      ]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = action;
+        button.dataset.index = String(index);
+        button.title = title;
+        button.textContent = label;
+        tools.append(button);
+      }
+      row.append(tools);
+    }
     fragment.append(item);
   }
   list.append(fragment);
@@ -685,6 +731,49 @@ async function advance(step) {
 }
 
 
+
+// -------------------------------------------------------- visualiser ----
+
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const visualiser = createVisualiser({
+  canvas: $('#vis'),
+  getAnalyser: () => engine.analyser(),
+  reducedMotion,
+  onError: error => {
+    // A failing mode is not a reason to lose the player. Fall back to None and
+    // say so, rather than leaving a dead canvas.
+    $('#vis-mode').value = 'none';
+    toast(`Visualiser stopped: ${error.message}`, 4000);
+  },
+});
+
+for (const { id, label } of visualiser.modes()) {
+  const option = document.createElement('option');
+  option.value = id;
+  option.textContent = label;
+  $('#vis-mode').append(option);
+}
+
+function applyVisualiserMode(id, { persist = true } = {}) {
+  const applied = visualiser.setMode(id);
+  $('#vis-mode').value = applied;
+  $('#vis-wrap').hidden = false;
+  if (persist) localStorage.setItem('nakliamp:visualiser', applied);
+  return applied;
+}
+
+applyVisualiserMode(localStorage.getItem('nakliamp:visualiser') || 'bars', { persist: false });
+
+$('#vis-mode').addEventListener('change', event => applyVisualiserMode(event.target.value));
+$('#vis-full').addEventListener('click', () => toggleFullVisualiser());
+
+function toggleFullVisualiser() {
+  const full = $('#vis-wrap').classList.toggle('full');
+  $('#vis-full').textContent = full ? 'Exit' : 'Full';
+  return full;
+}
+
 // --------------------------------------------------------- playlists ----
 
 let playlistRows = [];
@@ -767,7 +856,117 @@ $('#lib-reopen').addEventListener('click', async () => {
   await runScan(handle);
 });
 
+
+// ------------------------------------------------- playlist manager ----
+
+/** Write `tracks` to `path` as M3U8, reusing the folder grant. */
+async function writePlaylistFile(path, tracks, name) {
+  const handle = await storedFolder();
+  if (!handle) throw new Error('Open your music folder first.');
+  if (await grantState(handle) !== 'granted' && await reclaimFolder(handle) !== 'granted') {
+    throw new Error('Saving needs write access to your folder.');
+  }
+  const segments = path.split('/');
+  const fileName = segments.pop();
+  let directory = handle;
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  const file = await directory.getFileHandle(fileName, { create: true });
+  const writable = await file.createWritable();
+  await writable.write(toM3u8(tracks, { name, base: segments.join('/') }));
+  await writable.close();
+  return handle;
+}
+
+async function removeFromPlaylist(index) {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const { found } = tracksForPlaylist(playlist);
+  const next = found.filter((_, position) => position !== index);
+  await persistPlaylist(playlist, next, `Removed 1 track from ${playlist.name}.`);
+}
+
+async function movePlaylistTrack(index, step) {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const { found } = tracksForPlaylist(playlist);
+  const target = index + step;
+  if (target < 0 || target >= found.length) return;
+  const next = [...found];
+  [next[index], next[target]] = [next[target], next[index]];
+  await persistPlaylist(playlist, next, null);
+}
+
+/** Write the playlist back to disk, then rescan so the index matches the file. */
+async function persistPlaylist(playlist, tracks, message) {
+  try {
+    const handle = await writePlaylistFile(playlist.path, tracks, playlist.name);
+    if (message) reportScan(message);
+    await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not update ${playlist.name}: ${error.message}`);
+  }
+}
+
+async function renamePlaylist() {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const name = prompt('Rename playlist', playlist.name);
+  if (!name || name === playlist.name) return;
+
+  const directory = playlist.path.split('/').slice(0, -1).join('/');
+  const safe = name.replace(/[^\w \-.]/g, '_').trim() || 'playlist';
+  const nextPath = `${directory ? `${directory}/` : ''}${safe}.m3u8`;
+  const { found } = tracksForPlaylist(playlist);
+  try {
+    await writePlaylistFile(nextPath, found, name);
+    await deletePlaylistFile(playlist.path);
+    activePlaylist = nextPath;
+    reportScan(`Renamed to ${safe}.m3u8.`);
+    const handle = await storedFolder();
+    if (handle) await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not rename: ${error.message}`);
+  }
+}
+
+async function deletePlaylistFile(path) {
+  const handle = await storedFolder();
+  if (!handle) throw new Error('Open your music folder first.');
+  const segments = path.split('/');
+  const fileName = segments.pop();
+  let directory = handle;
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  await directory.removeEntry(fileName);
+}
+
+async function deleteActivePlaylist() {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  // A playlist is a file on disk, so removing it is a real deletion. Confirm.
+  if (!confirm(`Delete the playlist file ${playlist.path}? The tracks stay where they are.`)) return;
+  try {
+    await deletePlaylistFile(playlist.path);
+    activePlaylist = null;
+    reportScan(`Deleted ${playlist.name}.`);
+    const handle = await storedFolder();
+    if (handle) await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not delete: ${error.message}`);
+  }
+}
+
+$('#lib-rename').addEventListener('click', () => renamePlaylist());
+$('#lib-delete').addEventListener('click', () => deleteActivePlaylist());
+
 $('#lib-list').addEventListener('click', event => {
+  const tool = event.target.closest('.row-tools button');
+  if (tool) {
+    event.stopPropagation();
+    const index = Number(tool.dataset.index);
+    if (tool.dataset.action === 'remove') removeFromPlaylist(index);
+    else movePlaylistTrack(index, tool.dataset.action === 'up' ? -1 : 1);
+    return;
+  }
   const row = event.target.closest('.lib-row');
   if (row) playQueueAt(Number(row.dataset.index)).catch(error => toast(error.message, 5000));
 });
@@ -792,6 +991,9 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     openLibrary: () => openLibrary(),
     libraryTracks: () => libraryTracks.length,
     playlists: () => playlistRows.length,
+    visualiser: () => ({ mode: visualiser.mode(), running: visualiser.running, modes: visualiser.modes().length }),
+    setVisualiserMode: id => applyVisualiserMode(id),
+    toggleFullVisualiser: () => toggleFullVisualiser(),
     state: () => engine.state(),
     play: () => engine.play(),
     pause: () => engine.pause(),

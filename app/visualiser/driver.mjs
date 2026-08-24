@@ -1,0 +1,139 @@
+// Visualiser driver.
+//
+// Owns the animation frame, the canvas sizing, and the analyser buffers. Modes
+// stay pure; everything with a lifetime lives here, so switching modes or
+// stopping cannot leak a frame callback or a stale canvas.
+
+import { MODES, modeById, drawFrame } from './modes.mjs';
+
+const PALETTE = Object.freeze({
+  background: null,
+  accent: '#e0a24a',
+  warm: '#d98c5f',
+  hot: '#f2d08a',
+  good: '#8fbf7f',
+  muted: '#9d9180',
+  dim: 'rgba(157,145,128,0.18)',
+  text: '#efe8da',
+});
+
+/**
+ * Drive a canvas from an analyser.
+ *
+ * `getAnalyser` is called each frame rather than captured once, because the
+ * analyser changes when playback moves between rungs and a captured one would
+ * quietly go flat.
+ */
+export function createVisualiser({
+  canvas,
+  getAnalyser,
+  palette = PALETTE,
+  reducedMotion = () => false,
+  onError = () => {},
+}) {
+  const context = canvas.getContext('2d');
+  let mode = MODES[0];
+  let frameId = 0;
+  let running = false;
+  let memory = {};
+  let freq = new Uint8Array(0);
+  let wave = new Uint8Array(0);
+
+  function resize() {
+    // Match the backing store to the display size, capped so a full-window
+    // visualiser on a retina display does not paint four times the pixels it
+    // needs and drop frames doing it.
+    const ratio = Math.min(2, globalThis.devicePixelRatio || 1);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * ratio));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+  }
+
+  function frame() {
+    frameId = 0;
+    if (!running) return;
+    try {
+      const analyser = getAnalyser();
+      if (analyser) {
+        if (freq.length !== analyser.frequencyBinCount) {
+          freq = new Uint8Array(analyser.frequencyBinCount);
+          wave = new Uint8Array(analyser.fftSize);
+        }
+        analyser.getByteFrequencyData(freq);
+        analyser.getByteTimeDomainData(wave);
+      } else if (freq.length) {
+        // No analyser: decay to silence rather than freezing the last frame,
+        // which reads as a hang.
+        for (let index = 0; index < freq.length; index += 1) freq[index] = Math.max(0, freq[index] - 12);
+        wave.fill(128);
+      }
+      resize();
+      drawFrame(mode, {
+        context, freq, wave, palette, memory,
+        width: canvas.width, height: canvas.height,
+      });
+    } catch (error) {
+      // A failing mode must not take the player with it.
+      onError(error);
+      stop();
+      return;
+    }
+    schedule();
+  }
+
+  function schedule() {
+    if (!running || frameId) return;
+    // Reduced motion still shows the spectrum, just refreshed slowly enough not
+    // to animate. Stopping entirely would remove information, not just motion.
+    frameId = reducedMotion()
+      ? setTimeout(() => { frameId = 0; frame(); }, 500)
+      : requestAnimationFrame(frame);
+  }
+
+  function start() {
+    if (running || !mode.draw) return;
+    running = true;
+    schedule();
+  }
+
+  function stop() {
+    running = false;
+    if (frameId) {
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+      frameId = 0;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  return {
+    start,
+    stop,
+    get running() { return running; },
+    mode: () => mode.id,
+    modes: () => MODES.map(({ id, label }) => ({ id, label })),
+    setMode(id) {
+      mode = modeById(id);
+      memory = {}; // a mode never inherits another mode's state
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      if (mode.draw) start();
+      else stop();
+      return mode.id;
+    },
+    cycle(step = 1) {
+      const index = MODES.findIndex(candidate => candidate.id === mode.id);
+      return this.setMode(MODES[(index + step + MODES.length) % MODES.length].id);
+    },
+    destroy() {
+      stop();
+      memory = {};
+      freq = new Uint8Array(0);
+      wave = new Uint8Array(0);
+    },
+  };
+}
+
+export { PALETTE };
