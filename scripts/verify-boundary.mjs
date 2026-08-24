@@ -20,7 +20,7 @@ assert(/export function createNakliAmpEngine/.test(core), 'NakliAmp core factory
 const sourceFiles = [];
 async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (['.git', '.worktrees', 'vendor'].includes(entry.name)) continue;
+    if (['.git', '.worktrees', 'vendor', 'dist'].includes(entry.name)) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await walk(path);
     else if (/\.(html|js|mjs)$/.test(entry.name)) sourceFiles.push(path);

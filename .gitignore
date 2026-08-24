@@ -22,3 +22,4 @@ plan/
 # (golden-file audio fixtures land via a generator once the audio path opens;
 #  ignore stray downloads / caches here)
 *.log
+dist/

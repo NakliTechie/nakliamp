@@ -14,7 +14,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SKIP_DIRECTORIES = new Set(['.git', '.worktrees', 'node_modules', 'vendor', 'plan', 'test/fixtures']);
+const SKIP_DIRECTORIES = new Set(['.git', '.worktrees', 'node_modules', 'vendor', 'plan', 'dist', 'test/fixtures']);
 const SOURCE = /\.(html|js|mjs|json|css|md|sh|toml|jsonc)$/;
 
 // Everything in C0 except tab (09) and line feed (0A). Carriage return (0D) is

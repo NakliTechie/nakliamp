@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp single-file release gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1024px;height:768px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp single-file release"></iframe>
+<script type="module">
+// Single-file release gate.
+// Loads the built artifact and holds it to the same behaviour as the modular
+// source: it plays, it refuses WMA by name, and it reaches the network never.
+
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+async function fixture(name, WindowFile) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new WindowFile([await response.arrayBuffer()], name);
+}
+
+async function run() {
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The single-file build did not boot.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../dist/nakliamp.html?harness=1';
+  const app = await boot;
+  const harness = await waitFor(() => app.__nakliampHarness, 'The single-file build exposed no harness surface.');
+  const doc = app.document;
+
+  assert(doc.querySelector('#empty').classList.contains('on'), 'The empty state is not visible at boot.');
+  assert(doc.body.textContent.includes('no analytics'), 'The sovereignty copy is missing.');
+
+  await harness.open(await fixture('audio-mp3.mp3', app.File));
+  assert(doc.querySelector('#player').classList.contains('on'), 'The player did not open.');
+  assert(harness.state().path === 'r1', `The single file played on ${harness.state().path}, expected r1.`);
+  await harness.play();
+  await waitFor(() => harness.state().clock.positionS > 0.12, 'The clock did not advance.');
+  harness.pause();
+
+  let refusal = null;
+  try { await harness.open(await fixture('audio-wma.wma', app.File)); } catch (error) { refusal = error; }
+  assert(refusal?.code === 'ERR_DEMUX_WMA_REFUSED', `The refusal code changed: ${refusal?.code}`);
+
+  // The artifact must carry its own licence text, since it travels alone.
+  assert(
+    doc.querySelector('#mediabunny-licence')?.textContent.includes('Mozilla Public License'),
+    'The single file does not carry the Mediabunny licence.',
+  );
+
+  return { path: harness.state().path, refusal: refusal.code };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp single-file release gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp single-file release gate';
+});
+</script>
+</body>
+</html>

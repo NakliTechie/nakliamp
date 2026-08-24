@@ -46,6 +46,8 @@ node "$repo_root/scripts/verify-fixtures.mjs"
 node "$repo_root/scripts/verify-boundary.mjs"
 node "$repo_root/scripts/verify-r2-sessions.mjs"
 node "$repo_root/scripts/verify-delivery.mjs"
+node "$repo_root/scripts/build-single-file.mjs"
+node "$repo_root/scripts/verify-single-file.mjs"
 node --test "$repo_root/test/metadata.test.mjs" "$repo_root/test/store.test.mjs"
 "$python_bin" -m http.server "$verify_port" --bind "$verify_host" >"$profile_root/server.log" 2>&1 &
 server_pid=$!
@@ -77,7 +79,7 @@ for diagnostic_marker in L7_DECLARED_FAILURE L7_CONSOLE_SENTINEL l7-network-sent
   fi
 done
 
-for harness in golden-audio ui-smoke library universal; do
+for harness in golden-audio ui-smoke library universal single-file; do
   profile_path="$profile_root/chrome-$harness"
   verify_run=1
   while [ "$verify_run" -le "$verify_repeats" ]; do
