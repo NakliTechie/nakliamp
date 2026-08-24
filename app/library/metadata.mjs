@@ -63,6 +63,17 @@ function splitPair(value) {
   return [Number.isFinite(first) ? first : null, Number.isFinite(second) ? second : null];
 }
 
+/**
+ * Assign a "number/total" pair without destroying what is already known.
+ * Vorbis comments are unordered and a tag may repeat, so a later malformed or
+ * partial value must never wipe a good earlier one.
+ */
+function assignPair(tags, numberField, totalField, value) {
+  const [number, total] = splitPair(value);
+  if (number !== null) tags[numberField] ??= number;
+  if (total !== null) tags[totalField] ??= total;
+}
+
 function year(value) {
   const match = /(\d{4})/.exec(String(value ?? ''));
   return match ? Number.parseInt(match[1], 10) : null;
@@ -150,12 +161,20 @@ async function readId3(blob, tags) {
       ? u24be(region, cursor + 3)
       : (major === 4 ? syncsafe(region, cursor + 4) : u32be(region, cursor + 4));
     if (frameSize <= 0 || cursor + headerLength + frameSize > region.length) break;
-    const body = region.subarray(cursor + headerLength, cursor + headerLength + frameSize);
+    let bodyStart = cursor + headerLength;
+    let bodyLength = frameSize;
+    // ID3v2.4 frame flag 0x01 prefixes the body with a 4-byte syncsafe length.
+    // Decoding without skipping it puts four junk bytes at the front of the text.
+    if (major === 4 && (region[cursor + 9] & 0x01) !== 0 && bodyLength > 4) {
+      bodyStart += 4;
+      bodyLength -= 4;
+    }
+    const body = region.subarray(bodyStart, bodyStart + bodyLength);
 
     const textField = ID3_TEXT_FRAMES.get(id);
     if (textField) tags[textField] ??= id3Text(body);
-    else if (id === 'TRCK' || id === 'TRK') [tags.trackNo, tags.trackTotal] = splitPair(id3Text(body));
-    else if (id === 'TPOS' || id === 'TPA') [tags.discNo, tags.discTotal] = splitPair(id3Text(body));
+    else if (id === 'TRCK' || id === 'TRK') assignPair(tags, 'trackNo', 'trackTotal', id3Text(body));
+    else if (id === 'TPOS' || id === 'TPA') assignPair(tags, 'discNo', 'discTotal', id3Text(body));
     else if (id === 'TDRC' || id === 'TYER' || id === 'TYE') tags.year ??= year(id3Text(body));
     else if (id === 'APIC' || id === 'PIC') tags.picture ??= id3Picture(body);
     else if (id === 'USLT' || id === 'ULT') tags.lyrics ??= id3Lyrics(body, false);
@@ -193,9 +212,10 @@ function readVorbisComment(block, tags) {
 
     const field = VORBIS_FIELDS.get(key);
     if (field) tags[field] ??= trimNul(value);
-    else if (key === 'TRACKNUMBER') [tags.trackNo, tags.trackTotal] = splitPair(value);
+    else if (key === 'TRACKNUMBER') assignPair(tags, 'trackNo', 'trackTotal', value);
     else if (key === 'TRACKTOTAL' || key === 'TOTALTRACKS') tags.trackTotal ??= splitPair(value)[0];
-    else if (key === 'DISCNUMBER') [tags.discNo, tags.discTotal] = splitPair(value);
+    else if (key === 'DISCNUMBER') assignPair(tags, 'discNo', 'discTotal', value);
+    else if (key === 'DISCTOTAL' || key === 'TOTALDISCS') tags.discTotal ??= splitPair(value)[0];
     else if (key === 'DATE' || key === 'YEAR') tags.year ??= year(value);
     else if (key === 'METADATA_BLOCK_PICTURE') tags.pictureBase64 ??= value;
     else if (key === 'LYRICS' || key === 'UNSYNCEDLYRICS') {
@@ -242,7 +262,14 @@ async function readFlac(blob, tags) {
     else if (type === 6) tags.picture ??= readFlacPicture(body);
 
     cursor += 4 + length;
-    if (last) return;
+    if (last) break;
+  }
+  // A FLAC file may carry its art as a base64 comment rather than a picture
+  // block. The comment reader captures it; decoding it here is what makes the
+  // two carriers equivalent.
+  if (tags.pictureBase64) {
+    tags.picture ??= decodePictureComment(tags.pictureBase64);
+    delete tags.pictureBase64;
   }
 }
 
@@ -260,38 +287,73 @@ function decodePictureComment(base64) {
   }
 }
 
-/** Read the first few Ogg packets, which is where both header packets live. */
+/**
+ * Read Ogg header packets, honouring the segment-table lacing.
+ *
+ * A packet is a run of segments ending in one shorter than 255, and it may run
+ * past the end of a page onto the next. Treating one page's payload as one
+ * packet truncates any comment header larger than a page, which is the normal
+ * shape once cover art is embedded.
+ *
+ * Pages are read one at a time rather than in one large slab, so a tagged Ogg
+ * costs a few kilobytes of reads regardless of how large the file is.
+ */
 async function readOgg(blob, tags) {
-  const region = await bytes(blob, 0, Math.min(blob.size, 512 * 1024));
-  let cursor = 0;
-  const packets = [];
-  while (cursor + 27 <= region.length && ascii(region, cursor, 4) === 'OggS' && packets.length < 6) {
-    const segmentCount = region[cursor + 26];
-    const table = region.subarray(cursor + 27, cursor + 27 + segmentCount);
+  const PAGE_HEADER = 27;
+  let offset = 0;
+  let packet = [];
+  let packetBytes = 0;
+  let emitted = 0;
+
+  // Two header packets carry everything: identification, then comments.
+  while (emitted < 2 && offset + PAGE_HEADER <= blob.size) {
+    const header = await bytes(blob, offset, PAGE_HEADER);
+    if (header.length < PAGE_HEADER || ascii(header, 0, 4) !== 'OggS') return;
+    const segmentCount = header[26];
+    const table = await bytes(blob, offset + PAGE_HEADER, segmentCount);
+    if (table.length < segmentCount) return;
+
     let payloadLength = 0;
     for (const size of table) payloadLength += size;
-    const start = cursor + 27 + segmentCount;
-    packets.push(region.subarray(start, start + payloadLength));
-    cursor = start + payloadLength;
-  }
+    const payload = await bytes(blob, offset + PAGE_HEADER + segmentCount, payloadLength);
+    offset += PAGE_HEADER + segmentCount + payloadLength;
 
-  for (const packet of packets) {
-    if (packet.length > 8 && ascii(packet, 0, 8) === 'OpusTags') {
-      readVorbisComment(packet.subarray(8), tags);
-    } else if (packet.length > 7 && packet[0] === 3 && ascii(packet, 1, 6) === 'vorbis') {
-      readVorbisComment(packet.subarray(7), tags);
-    } else if (packet.length > 16 && packet[0] === 1 && ascii(packet, 1, 6) === 'vorbis') {
-      tags.channels = packet[11] || null;
-      tags.sampleRate = u32le(packet, 12) || null;
-    } else if (packet.length > 16 && ascii(packet, 0, 8) === 'OpusHead') {
-      tags.channels = packet[9] || null;
-      tags.sampleRate = u32le(packet, 12) || 48000;
+    let cursor = 0;
+    for (const size of table) {
+      packet.push(payload.subarray(cursor, cursor + size));
+      packetBytes += size;
+      cursor += size;
+      // A segment shorter than 255 terminates the packet; 255 means it continues.
+      if (size === 255) continue;
+      const complete = new Uint8Array(packetBytes);
+      let written = 0;
+      for (const part of packet) { complete.set(part, written); written += part.length; }
+      packet = [];
+      packetBytes = 0;
+      readOggPacket(complete, tags);
+      emitted += 1;
+      if (emitted >= 2) break;
     }
   }
 
   if (tags.pictureBase64) {
     tags.picture ??= decodePictureComment(tags.pictureBase64);
     delete tags.pictureBase64;
+  }
+}
+
+/** Dispatch one reassembled Ogg packet to the right reader. */
+function readOggPacket(packet, tags) {
+  if (packet.length > 8 && ascii(packet, 0, 8) === 'OpusTags') {
+    readVorbisComment(packet.subarray(8), tags);
+  } else if (packet.length > 7 && packet[0] === 3 && ascii(packet, 1, 6) === 'vorbis') {
+    readVorbisComment(packet.subarray(7), tags);
+  } else if (packet.length > 16 && packet[0] === 1 && ascii(packet, 1, 6) === 'vorbis') {
+    tags.channels = packet[11] || null;
+    tags.sampleRate = u32le(packet, 12) || null;
+  } else if (packet.length > 16 && ascii(packet, 0, 8) === 'OpusHead') {
+    tags.channels = packet[9] || null;
+    tags.sampleRate = u32le(packet, 12) || 48000;
   }
 }
 
@@ -339,8 +401,10 @@ async function readMp4(blob, tags) {
         // trkn/disk payload: reserved u16, number u16, total u16.
         const number = (payload[2] << 8) | payload[3];
         const total = (payload[4] << 8) | payload[5];
-        if (type === 'trkn') { tags.trackNo ??= number || null; tags.trackTotal ??= total || null; }
-        else { tags.discNo ??= number || null; tags.discTotal ??= total || null; }
+        // A zero here means "absent" only when the whole payload is empty, so
+        // keep 0 rather than folding it to null as `|| null` would.
+        if (type === 'trkn') { tags.trackNo ??= number; tags.trackTotal ??= total || null; }
+        else { tags.discNo ??= number; tags.discTotal ??= total || null; }
         return;
       }
       if (type === 'covr') {

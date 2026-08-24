@@ -364,3 +364,132 @@ test('titleFromName strips the extension and survives empty input', () => {
   assert.equal(titleFromName(''), 'Untitled track');
   assert.equal(titleFromName(null), 'Untitled track');
 });
+
+// ------------------------------------------- regressions (verifier pass) ----
+// Each test below fails against the version of the parser reviewed on
+// 2026-08-24 and passes after the fix. They are grouped so the defect each one
+// guards stays legible.
+
+/** Lace a packet across as many pages as its segment count requires. */
+function oggPages(packet) {
+  const segments = [];
+  let remaining = packet.length;
+  while (remaining >= 255) { segments.push(255); remaining -= 255; }
+  segments.push(remaining);
+
+  const pages = [];
+  let segmentIndex = 0;
+  let payloadOffset = 0;
+  let first = true;
+  while (segmentIndex < segments.length) {
+    // A page carries at most 255 segments.
+    const pageSegments = segments.slice(segmentIndex, segmentIndex + 255);
+    const pageLength = pageSegments.reduce((sum, size) => sum + size, 0);
+    pages.push(concat(
+      'OggS', u8(0), u8(first ? 0 : 1),
+      new Uint8Array(8), be32(1), be32(pages.length), be32(0),
+      u8(pageSegments.length), new Uint8Array(pageSegments),
+      packet.subarray(payloadOffset, payloadOffset + pageLength),
+    ));
+    segmentIndex += pageSegments.length;
+    payloadOffset += pageLength;
+    first = false;
+  }
+  return concat(...pages);
+}
+
+test('defect 1: an Ogg comment packet laced across pages is read whole', async () => {
+  const head = concat('OpusHead', u8(1, 2), u8(0, 0), le32(48000), u8(0, 0), u8(0));
+  // Pad past a single page's 65025-byte maximum, as embedded art does.
+  const padding = 'x'.repeat(70_000);
+  const comment = concat('OpusTags', vorbisComment([
+    `PADDING=${padding}`, 'TITLE=After The Boundary', 'ARTIST=Lost Artist',
+  ]));
+  const file = concat(oggPages(head), oggPages(comment));
+  assert.ok(file.length > 65_025, 'the fixture must exceed one page');
+
+  const tags = await readTags(new Blob([file]));
+  assert.equal(tags.title, 'After The Boundary');
+  assert.equal(tags.artist, 'Lost Artist');
+});
+
+test('defect 6: reading an Ogg costs a fraction of the file', async () => {
+  const head = concat('OpusHead', u8(1, 2), u8(0, 0), le32(48000), u8(0, 0), u8(0));
+  const comment = concat('OpusTags', vorbisComment(['TITLE=Small Header']));
+  const audio = new Uint8Array(4 * 1024 * 1024); // a realistically sized body
+  const file = concat(oggPages(head), oggPages(comment), audio);
+
+  let read = 0;
+  const blob = new Blob([file]);
+  const instrumented = {
+    size: blob.size,
+    slice(start, end) { read += end - start; return blob.slice(start, end); },
+  };
+  const tags = await readTags(instrumented);
+
+  assert.equal(tags.title, 'Small Header');
+  assert.ok(read < 64 * 1024, `read ${read} bytes of a ${blob.size}-byte file`);
+});
+
+test('defect 2: a FLAC picture carried as a base64 comment is decoded', async () => {
+  const base64 = Buffer.from(flacPictureBlock(IMAGE)).toString('base64');
+  const file = concat('fLaC', flacBlock(4, vorbisComment([
+    'TITLE=Art In A Comment', `METADATA_BLOCK_PICTURE=${base64}`,
+  ]), true));
+  const tags = await readTags(new Blob([file]));
+
+  assert.equal(tags.title, 'Art In A Comment');
+  assert.equal(tags.picture?.mime, 'image/png');
+  assert.deepEqual([...tags.picture.bytes], [...IMAGE]);
+  assert.equal(tags.pictureBase64, undefined);
+});
+
+test('defect 3: comment order cannot destroy a known track total', async () => {
+  const build = entries => concat('fLaC', flacBlock(4, vorbisComment(entries), true));
+  for (const entries of [
+    ['TRACKNUMBER=3', 'TRACKTOTAL=12'],
+    ['TRACKTOTAL=12', 'TRACKNUMBER=3'],
+    ['TOTALTRACKS=12', 'TRACKNUMBER=3'],
+  ]) {
+    const tags = await readTags(new Blob([build(entries)]));
+    assert.equal(tags.trackNo, 3, `order ${entries.join(' ')} lost the track number`);
+    assert.equal(tags.trackTotal, 12, `order ${entries.join(' ')} lost the track total`);
+  }
+});
+
+test('defect 3: disc totals survive the same reordering', async () => {
+  const file = concat('fLaC', flacBlock(4, vorbisComment(['DISCTOTAL=2', 'DISCNUMBER=1']), true));
+  const tags = await readTags(new Blob([file]));
+  assert.equal(tags.discNo, 1);
+  assert.equal(tags.discTotal, 2);
+});
+
+test('defect 5: a later malformed TRCK cannot wipe a good one', async () => {
+  const tag = id3(4, [['TRCK', textFrame('3/12')], ['TRCK', textFrame('--')]]);
+  const tags = await readTags(new Blob([concat(tag, u8(0xff, 0xfb))]));
+  assert.equal(tags.trackNo, 3);
+  assert.equal(tags.trackTotal, 12);
+});
+
+test('defect 4: an ID3v2.4 data-length-indicator frame decodes cleanly', async () => {
+  // Flag 0x01 in the second flags byte prefixes the body with a syncsafe length.
+  const text = textFrame('DLI Title');
+  const body = concat(syncsafe(text.length), text);
+  const frame = concat('TIT2', syncsafe(body.length), u8(0, 0x01), body);
+  const tag = concat('ID3', u8(4, 0, 0), syncsafe(frame.length), frame);
+  const tags = await readTags(new Blob([concat(tag, u8(0xff, 0xfb))]));
+  assert.equal(tags.title, 'DLI Title');
+});
+
+test('defect 8: an MP4 track number of 0 is kept, matching the other families', async () => {
+  const ilst = atom('ilst', atom('trkn', dataAtom(0, u8(0, 0, 0, 0, 0, 0, 0, 0))));
+  const file = concat(atom('ftyp', 'M4A ', be32(0)), atom('moov', atom('udta', atom('meta', u8(0, 0, 0, 0), ilst))));
+  const mp4 = await readTags(new Blob([file]));
+
+  const vorbis = await readTags(new Blob([concat('fLaC', flacBlock(4, vorbisComment(['TRACKNUMBER=0']), true))]));
+  const id3v2 = await readTags(new Blob([concat(id3(4, [['TRCK', textFrame('0')]]), u8(0xff, 0xfb))]));
+
+  assert.equal(mp4.trackNo, 0);
+  assert.equal(vorbis.trackNo, 0);
+  assert.equal(id3v2.trackNo, 0);
+});
