@@ -259,16 +259,86 @@ export function createNakliAmpEngine({
   let nativeAudio = null;
   let nativeUrl = null;
   let nativeMetadata = null;
+  let nativeGraph = null;
   let nativeFingerprint = null;
   let lastError = null;
   let latestLoadId = 0;
   let fellBackFrom = null;
   let software = null;
+  let analyser = null;
+  let analyserOwner = null;
 
   function preferredMode() {
     if (forcePath === 'r1') return 'r1';
     if (forcePath === 'r2') return 'r2';
     return reel.caps().audioDecoder ? 'r1' : 'r2';
+  }
+
+  /**
+   * A spectrum tap on whichever rung is playing.
+   *
+   * One analyser for all three rungs, because a visualiser that works on some
+   * files and not others is worse than none. R1 uses the seam Reel exposes,
+   * R2 routes the native element through Web Audio, R3 already owns its graph.
+   *
+   * Returns null when nothing is playing or the rung cannot be tapped, and the
+   * caller is expected to show no visualiser rather than a fake one.
+   */
+  function audioAnalyser() {
+    if (!mode) return null;
+    if (analyser && analyserOwner === mode) return analyser;
+    try {
+      const graph = rungGraph();
+      if (!graph) return null;
+      const next = graph.context.createAnalyser();
+      next.fftSize = 2048;
+      next.smoothingTimeConstant = 0.72;
+      // Inserted in parallel, never in series: the tap must not sit between the
+      // output and the destination, where a mistake would silence playback.
+      graph.output.connect(next);
+      analyser = next;
+      analyserOwner = mode;
+      return analyser;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function rungGraph() {
+    if (mode === 'r3' && software) return { context: software.context, output: software.gain };
+    if (mode === 'r1') return reel.audioGraph?.() ?? null;
+    if (mode === 'r2' && nativeAudio) {
+      if (!nativeGraph) {
+        // createMediaElementSource reroutes the element through Web Audio, so
+        // the destination has to be reconnected or playback goes silent.
+        const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
+        if (!AudioContextClass || typeof nativeAudio.play !== 'function') return null;
+        const context = new AudioContextClass();
+        // Hazard worth naming: createMediaElementSource permanently reroutes
+        // the element through Web Audio and cannot be undone. If the context
+        // is suspended by autoplay policy, that means silence. So the graph is
+        // only built once the context is actually running, and until then the
+        // caller gets null and shows no visualiser rather than risking audio.
+        if (context.state === 'suspended') {
+          context.resume().catch(() => {});
+          try { context.close(); } catch (_) {}
+          return null;
+        }
+        const source = context.createMediaElementSource(nativeAudio);
+        const output = context.createGain();
+        source.connect(output);
+        output.connect(context.destination);
+        nativeGraph = { context, output };
+      }
+      return nativeGraph;
+    }
+    return null;
+  }
+
+  function disposeAnalyser() {
+    try { analyser?.disconnect(); } catch (_) {}
+    analyser = null;
+    analyserOwner = null;
   }
 
   function disposeSoftware() {
@@ -319,6 +389,9 @@ export function createNakliAmpEngine({
     try { nativeAudio?.removeAttribute?.('src'); } catch (_) {}
     try { nativeAudio?.load(); } catch (_) {}
     if (nativeUrl) URL.revokeObjectURL(nativeUrl);
+    try { nativeGraph?.output?.disconnect(); } catch (_) {}
+    try { nativeGraph?.context?.close?.(); } catch (_) {}
+    nativeGraph = null;
     nativeAudio = null;
     nativeUrl = null;
   }
@@ -431,6 +504,7 @@ export function createNakliAmpEngine({
       }
       reel.pause();
       disposeNative();
+      disposeAnalyser();
       disposeSoftware();
       software = null;
       nativeAudio = candidateAudio;
@@ -512,6 +586,7 @@ export function createNakliAmpEngine({
 
     reel.pause();
     disposeNative();
+    disposeAnalyser();
     disposeSoftware();
     software = softwarePlayback(decoded, file.name, file.size, decoded.container);
     mode = 'r3';
@@ -788,6 +863,7 @@ export function createNakliAmpEngine({
     setVolume,
     setMuted,
     state,
+    analyser: audioAnalyser,
     on: events.on,
     eventHistory: events.history,
     destroy,

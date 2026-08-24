@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const expected = Object.freeze({
-  'engine/reel-engine.mjs': 'fbe028453dda8dffda69af7fac4d14a700e182b62b03eb0c8ddfd455170b1a3b',
+  'engine/reel-engine.mjs': '791a691fd8d0d95c9cf7fd27adf3bad2469c918f15e30ed9e57f05d0dad4c175',
   'vendor/mediabunny/mediabunny-1.51.0.min.mjs': '1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b',
   'vendor/mediabunny/LICENSE-MPL-2.0.txt': '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04',
 });
@@ -24,11 +24,11 @@ for (const [path, digest] of Object.entries(expected)) {
     throw new Error(`VENDOR.md does not document the current SHA-256 for ${path}.`);
   }
 }
-if (!vendor.includes('e1fbff5432587bb194cb0e1a7d7efbaf1da7f13b')) {
+if (!vendor.includes('292b0916d7f139f6f27fe14661772a7dee43da7d')) {
   throw new Error('VENDOR.md omits the exact Reel commit.');
 }
 if (!vendor.includes('corresponding-source notice') && !vendor.includes('Corresponding Mediabunny source')) {
   throw new Error('VENDOR.md omits Mediabunny source availability.');
 }
 
-console.log('PASS — Vendor pin: Reel e1fbff5; three files match SHA-256');
+console.log('PASS — Vendor pin: Reel 292b091; three files match SHA-256');

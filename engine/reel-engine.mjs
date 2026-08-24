@@ -1698,7 +1698,12 @@ registerProcessor('${PROCESSOR}', ReelPcmRingProcessor);
     };
   }
 
-  return { unlock, prepare, play, stop, current, setRate, setVolume, state };
+  /** The final gain stage and its context, for a host that wants to tap them. */
+  function audioGraph() {
+    return context && gain ? { context, output: gain } : null;
+  }
+
+  return { unlock, prepare, play, stop, current, setRate, setVolume, state, audioGraph };
 })();
 
 /* Layer 5 — monotonic clock with optional audio master. */
@@ -1841,12 +1846,7 @@ const Renderer = (() => {
       clear();
       clock = null;
     }
-    /** The final gain stage and its context, for a host that wants to tap them. */
-  function audioGraph() {
-    return context && gain ? { context, output: gain } : null;
-  }
-
-  return { enqueue, start, stop, clear, snapshot, stats, destroy, audioGraph };
+    return { enqueue, start, stop, clear, snapshot, stats, destroy };
   }
   return { attach };
 })();

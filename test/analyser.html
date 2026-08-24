@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>NakliAmp analyser gate</title></head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+// Analyser-tap gate.
+//
+// The visualiser needs sample data from whichever rung is playing. This asserts
+// the tap yields real spectrum on the rungs a fixture can reach, that it never
+// changes what is heard, and that it reports null rather than lying when a rung
+// cannot be tapped.
+
+import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+import { decodePcm, sniffPcm } from '../app/decode/pcm.mjs';
+
+const DECODERS = [{ name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm }];
+const result = document.querySelector('#result');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+
+async function fixture(name) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new File([await response.arrayBuffer()], name);
+}
+
+/** Peak magnitude across the spectrum, sampled until it moves or time runs out. */
+async function peakEnergy(engine, timeoutMs = 3000) {
+  const analyser = engine.analyser();
+  if (!analyser) return null;
+  const bins = new Uint8Array(analyser.frequencyBinCount);
+  const deadline = performance.now() + timeoutMs;
+  let peak = 0;
+  while (performance.now() < deadline) {
+    analyser.getByteFrequencyData(bins);
+    for (const value of bins) if (value > peak) peak = value;
+    if (peak > 8) return peak;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  return peak;
+}
+
+async function run() {
+  const report = {};
+
+  // R1: the engine rung, through the seam Reel exposes.
+  {
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: DECODERS });
+    await engine.load(await fixture('audio-mp3.mp3'));
+    assert(engine.state().path === 'r1', 'The MP3 did not load on R1.');
+    await engine.play();
+    const analyser = engine.analyser();
+    assert(analyser, 'R1 exposed no analyser; the Reel seam is missing or unpinned.');
+    assert(analyser.frequencyBinCount > 0, 'R1 analyser has no frequency bins.');
+    const peak = await peakEnergy(engine);
+    assert(peak > 8, `R1 spectrum stayed flat (peak ${peak}).`);
+    // The tap is parallel, so playback must be unaffected by reading it.
+    assert(engine.state().clock.playing, 'R1 stopped playing once tapped.');
+    const before = engine.state().clock.positionS;
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert(engine.state().clock.positionS > before, 'R1 clock stalled once tapped.');
+    engine.pause();
+    report.r1Peak = peak;
+  }
+
+  // R3: the software rung, which owns its own graph.
+  {
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: DECODERS });
+    await engine.load(await fixture('audio-pcm.aiff'));
+    assert(engine.state().path === 'r3', 'The AIFF did not load on R3.');
+    await engine.play();
+    const analyser = engine.analyser();
+    assert(analyser, 'R3 exposed no analyser.');
+    const peak = await peakEnergy(engine);
+    assert(peak > 8, `R3 spectrum stayed flat (peak ${peak}).`);
+    assert(engine.state().clock.playing, 'R3 stopped playing once tapped.');
+    engine.pause();
+    report.r3Peak = peak;
+  }
+
+  // Asking before anything is loaded must answer null, not throw.
+  {
+    const engine = createNakliAmpEngine({ version: 'gate' });
+    assert(engine.analyser() === null, 'An idle engine returned an analyser.');
+  }
+
+  // The same analyser is returned while the rung is unchanged.
+  {
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: DECODERS });
+    await engine.load(await fixture('audio-pcm.aiff'));
+    assert(engine.analyser() === engine.analyser(), 'A new analyser was built per call.');
+  }
+
+  return report;
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp analyser gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp analyser gate';
+});
+</script>
+</body>
+</html>
