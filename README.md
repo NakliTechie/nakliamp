@@ -32,9 +32,15 @@ track went unplayed.
 
 ## Library
 
-Open a folder and NakliAmp indexes it in a background worker: ID3v2, Vorbis
-comments, MP4 atoms, FLAC pictures. Search is fuzzy and ranked — `skr` finds
-"Sakura". Playback remembers where you stopped.
+Attach a folder — pick it, or drag it onto the window — and NakliAmp indexes it
+in a background worker, subfolders included: ID3v2, Vorbis comments, MP4 atoms,
+FLAC pictures. Search is fuzzy and ranked, so `skr` finds "Sakura". Playback
+remembers where you stopped.
+
+The folder is remembered. Reopen NakliAmp and your library is already there; if
+the browser needs its permission renewed, your indexed tracks still list and one
+button restores access. Storage persistence is requested so the browser does not
+evict the grant or the index.
 
 The index is a cache, not the truth. Your folder is the truth. Losing the index
 costs a rescan and nothing else.
@@ -42,6 +48,20 @@ costs a rescan and nothing else.
 A folder grant that a browser revokes between sessions is expected, not an
 error: your indexed library still lists, and NakliAmp offers to reopen the
 folder.
+
+## Playlists
+
+Playlists are files in your folder, not rows in a database. The index is a cache
+you can throw away; the playlist is an artifact any other player can open and
+NakliAmp's disappearance cannot take.
+
+Reads **M3U**, **M3U8** (with `EXTINF`), **PLS**, **XSPF**, and **JSPF**. The
+scan finds them beside your music and lists them. Writes **M3U8**, which every
+player understands.
+
+Entries are resolved relative to the playlist's own directory. An entry that
+names a remote stream, or that tries to climb above the folder you granted, is
+kept and counted as unresolved rather than followed or silently dropped.
 
 ## Keyboard
 

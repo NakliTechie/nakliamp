@@ -79,6 +79,11 @@ async function run() {
     'The empty library said nothing about what to do next.',
   );
   assert(harness.libraryTracks() === 0, 'The harness library was unexpectedly populated.');
+  assert(harness.playlists() === 0, 'The harness library reported playlists it does not have.');
+  assert(doc.querySelector('#lib-playlist'), 'The playlist control is missing.');
+  assert(doc.querySelector('#lib-playlist').hidden, 'The playlist control shows with no playlists.');
+  assert(doc.querySelector('#lib-reopen').hidden, 'The reopen button shows with no remembered folder.');
+  assert(doc.querySelector('#lib-save'), 'The save-as-playlist control is missing.');
 
   doc.querySelector('#lib-search').value = 'nothing matches this';
   doc.querySelector('#lib-search').dispatchEvent(new app.Event('input'));

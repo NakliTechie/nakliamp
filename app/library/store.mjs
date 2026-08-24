@@ -9,13 +9,14 @@
 // migration rather than a field that silently disappears.
 
 const DATABASE = 'nakliamp';
-const VERSION = 1;
+const VERSION = 2;
 
 export const TRACK_SCHEMA = 1;
 
 const STORE_TRACKS = 'tracks';
 const STORE_ART = 'art';
 const STORE_META = 'meta';
+const STORE_PLAYLISTS = 'playlists';
 
 /** Fields that define index identity. The hash covers these and nothing else. */
 const IDENTITY_FIELDS = Object.freeze([
@@ -68,6 +69,11 @@ export function openLibrary() {
       }
       if (!database.objectStoreNames.contains(STORE_ART)) database.createObjectStore(STORE_ART, { keyPath: 'key' });
       if (!database.objectStoreNames.contains(STORE_META)) database.createObjectStore(STORE_META, { keyPath: 'key' });
+      // Added in schema 2. Playlists are files in the folder; this table is a
+      // cache of what the scan found, exactly like the track table.
+      if (!database.objectStoreNames.contains(STORE_PLAYLISTS)) {
+        database.createObjectStore(STORE_PLAYLISTS, { keyPath: 'path' });
+      }
     };
     open.onsuccess = () => resolve(open.result);
     open.onerror = () => reject(open.error);
@@ -217,11 +223,39 @@ export async function updateTrackState(id, patch) {
 
 export async function clearLibrary() {
   const database = await openLibrary();
-  const transaction = database.transaction([STORE_TRACKS, STORE_ART, STORE_META], 'readwrite');
-  transaction.objectStore(STORE_TRACKS).clear();
-  transaction.objectStore(STORE_ART).clear();
-  transaction.objectStore(STORE_META).clear();
+  const stores = [STORE_TRACKS, STORE_ART, STORE_META, STORE_PLAYLISTS];
+  const transaction = database.transaction(stores, 'readwrite');
+  for (const store of stores) transaction.objectStore(store).clear();
   await finish(transaction);
+}
+
+// ------------------------------------------------------- playlists ----
+
+export async function putPlaylists(playlists) {
+  const database = await openLibrary();
+  const transaction = database.transaction(STORE_PLAYLISTS, 'readwrite');
+  const store = transaction.objectStore(STORE_PLAYLISTS);
+  for (const playlist of playlists) store.put(playlist);
+  await finish(transaction);
+  return playlists.length;
+}
+
+export async function allPlaylists() {
+  const database = await openLibrary();
+  const rows = await request(
+    database.transaction(STORE_PLAYLISTS, 'readonly').objectStore(STORE_PLAYLISTS).getAll(),
+  );
+  return rows.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+}
+
+export async function deletePlaylists(paths) {
+  if (!paths.length) return 0;
+  const database = await openLibrary();
+  const transaction = database.transaction(STORE_PLAYLISTS, 'readwrite');
+  const store = transaction.objectStore(STORE_PLAYLISTS);
+  for (const path of paths) store.delete(path);
+  await finish(transaction);
+  return paths.length;
 }
 
 // --------------------------------------------------------- reading ----

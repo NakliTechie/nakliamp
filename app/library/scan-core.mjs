@@ -9,9 +9,16 @@
 // caller only ever handles small progress messages.
 
 import { readTags, titleFromName } from './metadata.mjs';
-import { putTracks, deleteTracks, putArt, trackId, allTracks, indexHash, setMeta } from './store.mjs';
+import {
+  putTracks, deleteTracks, putArt, trackId, allTracks, indexHash, setMeta,
+  putPlaylists, allPlaylists, deletePlaylists,
+} from './store.mjs';
+import { isPlaylistPath, parsePlaylist } from './playlist.mjs';
 
-const AUDIO = /\.(mp3|flac|m4a|mp4|aac|ogg|oga|opus|wav|wave|mka|weba|webm)$/i;
+// Deliberately broad. The engine and the browser decide what actually plays;
+// this only decides what is worth opening. A file the ladder refuses becomes a
+// named refusal at play time, which is more useful than never being listed.
+const AUDIO = /\.(mp3|mp2|mpga|flac|m4a|m4b|m4r|mp4|aac|adts|ogg|oga|opus|spx|wav|wave|aif|aiff|aifc|caf|mka|mkv|weba|webm|3gp|amr|wma|ape|wv|mpc|tta|dsf|dff|alac|ac3|dts|au|snd|voc|ra|tak|shn)$/i;
 
 // Batch writes so a large library is not one enormous transaction, and so
 // progress is visible while the scan runs.
@@ -35,7 +42,7 @@ async function* walk(directoryHandle, isCancelled, prefix = '', depth = 0) {
     if (name.startsWith('.')) continue;
     const path = prefix ? `${prefix}/${name}` : name;
     if (handle.kind === 'directory') yield* walk(handle, isCancelled, path, depth + 1);
-    else if (AUDIO.test(name)) yield [path, handle];
+    else if (AUDIO.test(name) || isPlaylistPath(name)) yield [path, handle];
   }
 }
 
@@ -100,20 +107,36 @@ async function record(path, handle, previous) {
 export async function scanFolder(rootHandle, { post = () => {}, isCancelled = () => false } = {}) {
   const started = Date.now();
   const existing = new Map((await allTracks()).map(track => [track.path, track]));
+  const existingPlaylists = new Set((await allPlaylists()).map(playlist => playlist.path));
   const seen = new Set();
+  const seenPlaylists = new Set();
   const pending = [];
+  const pendingPlaylists = [];
   let scanned = 0;
   let updated = 0;
   let failed = 0;
+  let playlists = 0;
 
   const flush = async () => {
-    if (!pending.length) return;
-    const batch = pending.splice(0, pending.length);
-    updated += await putTracks(batch);
+    if (pending.length) updated += await putTracks(pending.splice(0, pending.length));
+    if (pendingPlaylists.length) await putPlaylists(pendingPlaylists.splice(0, pendingPlaylists.length));
   };
 
   for await (const [path, handle] of walk(rootHandle, isCancelled)) {
     if (isCancelled()) break;
+    if (isPlaylistPath(path)) {
+      seenPlaylists.add(path);
+      try {
+        const file = await handle.getFile();
+        pendingPlaylists.push(parsePlaylist(await file.text(), path));
+        playlists += 1;
+      } catch (error) {
+        failed += 1;
+        post({ type: 'file-error', path, message: String(error?.message ?? error) });
+      }
+      scanned += 1;
+      continue;
+    }
     seen.add(path);
     try {
       const result = await record(path, handle, existing.get(path));
@@ -140,6 +163,7 @@ export async function scanFolder(rootHandle, { post = () => {}, isCancelled = ()
   if (!isCancelled()) {
     const missing = [...existing.keys()].filter(path => !seen.has(path));
     removed = await deleteTracks(missing.map(path => existing.get(path).id));
+    await deletePlaylists([...existingPlaylists].filter(path => !seenPlaylists.has(path)));
   }
 
   const tracks = await allTracks();
@@ -153,6 +177,7 @@ export async function scanFolder(rootHandle, { post = () => {}, isCancelled = ()
     updated,
     removed,
     failed,
+    playlists,
     tracks: tracks.length,
     hash,
     durationMs: Date.now() - started,

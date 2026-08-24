@@ -19,6 +19,7 @@
 // is exactly the one the worker runs.
 
 import { scanFolder } from '../app/library/scan-core.mjs';
+import { allPlaylists } from '../app/library/store.mjs';
 import {
   clearLibrary, allTracks, trackCount, indexHash, getTrack, trackId,
   updateTrackState, getArt, groupAlbums, groupArtists,
@@ -97,7 +98,7 @@ const ALBUM_COUNT = 100;
 const TRACKS_PER_ALBUM = 10;
 const TOTAL = ALBUM_COUNT * TRACKS_PER_ALBUM;
 
-function buildLibrary({ modifiedAt = 1_000_000 } = {}) {
+function buildLibrary({ modifiedAt = 1_000_000, withPlaylist = false } = {}) {
   const albums = {};
   for (let albumIndex = 0; albumIndex < ALBUM_COUNT; albumIndex += 1) {
     const artist = `Artist ${albumIndex % 25}`;
@@ -112,7 +113,22 @@ function buildLibrary({ modifiedAt = 1_000_000 } = {}) {
     }
     albums[album] = directory(album, tracks);
   }
-  return directory('Music', albums);
+  const root = { ...albums };
+  if (withPlaylist) {
+    // A playlist beside the music, naming tracks by relative path, exactly as
+    // another player would have written it.
+    root['evening.m3u8'] = fileHandle('evening.m3u8', new TextEncoder().encode([
+      '#EXTM3U',
+      '#PLAYLIST:Evening',
+      '#EXTINF:5,Artist 3 - Track 2 of Album 3',
+      'Album 3/02 Track.flac',
+      '#EXTINF:5,Artist 4 - Track 5 of Album 4',
+      'Album 4/05 Track.flac',
+      '#EXTINF:-1,Not In This Folder',
+      'Album 999/01 Missing.flac',
+    ].join('\n')), modifiedAt);
+  }
+  return directory('Music', root);
 }
 
 // ------------------------------------------------------------- gate ----
@@ -192,6 +208,34 @@ async function run() {
   assert(afterDelete.tracks === TOTAL - TRACKS_PER_ALBUM, 'The index kept rows for deleted files.');
   assert(afterDelete.hash !== firstHash, 'Deleting an album did not change the index hash.');
 
+  // Playlists found beside the music are indexed like tracks are.
+  {
+    const withPlaylists = await scanFolder(buildLibrary({ withPlaylist: true }), {});
+    assert(withPlaylists.playlists === 1, `Found ${withPlaylists.playlists} playlists, expected 1.`);
+    assert(withPlaylists.tracks === TOTAL, 'The playlist file was counted as a track.');
+
+    const [playlist] = await allPlaylists();
+    assert(playlist, 'The playlist was not stored.');
+    assert(playlist.name === 'Evening', `Playlist name did not parse: ${playlist.name}`);
+    assert(playlist.entries.length === 3, `Playlist has ${playlist.entries.length} entries, expected 3.`);
+    assert(
+      playlist.entries[0].path === 'Album 3/02 Track.flac',
+      `Relative entry did not resolve: ${playlist.entries[0].path}`,
+    );
+    assert(playlist.entries[0].artist === 'Artist 3', 'EXTINF artist did not parse.');
+
+    // An entry naming a file that is not there stays visible as unmatched.
+    const indexed = new Set((await allTracks()).map(track => track.path));
+    const matched = playlist.entries.filter(entry => indexed.has(entry.path));
+    assert(matched.length === 2, `${matched.length} of 3 entries matched the index, expected 2.`);
+
+    // Removing the playlist file removes it from the index.
+    const withoutPlaylist = await scanFolder(buildLibrary(), {});
+    assert(withoutPlaylist.playlists === 0, 'A deleted playlist was still counted.');
+    assert((await allPlaylists()).length === 0, 'A deleted playlist stayed in the index.');
+    assert(withoutPlaylist.hash === firstHash, 'Adding and removing a playlist changed the track hash.');
+  }
+
   // Art is only stored when a file actually carries a picture.
   assert(await getArt(sample.artKey) === null, 'Art was stored for a track with no picture.');
 
@@ -205,6 +249,7 @@ async function run() {
     hash: firstHash.slice(0, 16),
     scanMs: firstScan.durationMs,
     rescanMs: secondScan.durationMs,
+    playlistsTested: 1,
     longTasks: longTasks.length,
     worstLongTaskMs: Math.round(worstLongTask),
   };

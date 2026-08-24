@@ -8,6 +8,27 @@ import { getMeta, setMeta } from './store.mjs';
 
 const GRANT_KEY = 'rootHandle';
 
+// Read-write from the first prompt. Playlists are files in your folder, so
+// saving one needs write access; asking once is smoother than asking again
+// later, and the browser's prompt is a single dialog either way.
+const GRANT_MODE = Object.freeze({ mode: 'readwrite' });
+
+/**
+ * Ask the browser not to evict our storage.
+ * Without it the folder handle and the whole index are best-effort data that a
+ * browser may clear under pressure, and "remember my folder" quietly stops
+ * being true. Failure is not fatal; it just means the grant may not survive.
+ */
+export async function persistStorage() {
+  try {
+    if (!navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}
+
 export class GrantError extends Error {
   constructor(code, message) {
     super(message);
@@ -30,13 +51,30 @@ export async function requestFolder() {
     );
   }
   try {
-    const handle = await showDirectoryPicker({ id: 'nakliamp-library', mode: 'read' });
-    await setMeta(GRANT_KEY, handle);
+    const handle = await showDirectoryPicker({ id: 'nakliamp-library', ...GRANT_MODE });
+    await adoptFolder(handle);
     return handle;
   } catch (error) {
     if (error?.name === 'AbortError') return null;
     throw error;
   }
+}
+
+/**
+ * Remember a folder handle, however it arrived: the picker, or a drag and drop.
+ * Dropping a folder onto the window is the shortest path from "I have music"
+ * to "it is playing", so it must persist exactly like the picker does.
+ */
+export async function adoptFolder(handle) {
+  await setMeta(GRANT_KEY, handle);
+  await setMeta('rootName', handle?.name ?? null);
+  await persistStorage();
+  return handle;
+}
+
+/** The name of the remembered folder, for showing which one it is. */
+export async function storedFolderName() {
+  return getMeta('rootName', null);
 }
 
 /** The stored handle, or null when there is none. Does not prompt. */
@@ -51,18 +89,37 @@ export async function storedFolder() {
 export async function grantState(handle) {
   if (!handle) return 'none';
   if (typeof handle.queryPermission !== 'function') return 'granted';
-  return handle.queryPermission({ mode: 'read' });
+  return handle.queryPermission(GRANT_MODE);
 }
 
 /** Re-request an existing grant. Must be called from a user gesture. */
 export async function reclaimFolder(handle) {
   if (!handle) return 'none';
   if (typeof handle.requestPermission !== 'function') return 'granted';
-  return handle.requestPermission({ mode: 'read' });
+  return handle.requestPermission(GRANT_MODE);
 }
 
 export async function forgetFolder() {
   await setMeta(GRANT_KEY, null);
+  await setMeta('rootName', null);
+}
+
+/**
+ * Pull a directory handle out of a drop, if the drop was a folder.
+ * Returns null for a plain file drop, which the caller plays directly.
+ */
+export async function directoryFromDrop(dataTransfer) {
+  const items = [...(dataTransfer?.items ?? [])];
+  for (const item of items) {
+    if (item.kind !== 'file' || typeof item.getAsFileSystemHandle !== 'function') continue;
+    try {
+      const handle = await item.getAsFileSystemHandle();
+      if (handle?.kind === 'directory') return handle;
+    } catch {
+      // A drop that cannot yield a handle is simply not a folder drop.
+    }
+  }
+  return null;
 }
 
 /**

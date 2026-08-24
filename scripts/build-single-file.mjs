@@ -124,18 +124,24 @@ source location are included at the end of this file.
 ${vendorNotice.trim().split('\n').map(line => `  ${line}`).join('\n')}
 -->`;
 
+// Every replacement below is a function, never a string. A string replacement
+// interprets `$&`, `$\`` and `$'`, and this code is full of `$('#id')` while the
+// vendored runtime is full of `$` besides — a string replacement silently
+// corrupts the output rather than failing.
+const insert = value => () => value;
+
+const scriptBlock = `<script type="module">\n${
+  loader.replace('__NAKLIAMP_SOURCES__', insert(sources))
+}\n${appScript}\n</script>`;
+
+const licenceBlock = `<script type="application/vnd.nakliamp.licence" id="mediabunny-licence">\n${
+  licence.replace(/<\/script>/gi, '<\\/script>')
+}\n</script>\n</body>`;
+
 const output = html
-  .replace('<!DOCTYPE html>', `<!DOCTYPE html>\n${banner}`)
-  .replace(
-    /<script type="module">[\s\S]*?<\/script>/,
-    `<script type="module">\n${loader.replace('__NAKLIAMP_SOURCES__', sources)}\n${appScript}\n</script>`,
-  )
-  .replace(
-    '</body>',
-    `<script type="application/vnd.nakliamp.licence" id="mediabunny-licence">\n${
-      licence.replace(/<\/script>/gi, '<\\/script>')
-    }\n</script>\n</body>`,
-  );
+  .replace('<!DOCTYPE html>', insert(`<!DOCTYPE html>\n${banner}`))
+  .replace(/<script type="module">[\s\S]*?<\/script>/, insert(scriptBlock))
+  .replace('</body>', insert(licenceBlock));
 
 await mkdir(resolve(root, dirname(OUTPUT)), { recursive: true });
 await writeFile(resolve(root, OUTPUT), output);

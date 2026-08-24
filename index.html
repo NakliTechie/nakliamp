@@ -159,6 +159,9 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
         <h2 id="library-title">Library</h2>
         <input class="lib-search" id="lib-search" type="search" placeholder="Search your library" aria-label="Search your library" autocomplete="off">
         <span class="lib-count" id="lib-count"></span>
+        <button class="btn primary" id="lib-reopen" type="button" hidden>Reopen folder</button>
+        <select class="lib-search" id="lib-playlist" aria-label="Playlists" style="flex:0 1 200px" hidden></select>
+        <button class="btn" id="lib-save" type="button">Save as playlist</button>
         <button class="btn" id="lib-rescan" type="button">Rescan</button>
         <button class="btn" id="lib-forget" type="button">Forget folder</button>
         <button class="btn" id="lib-close" type="button">Close</button>
@@ -189,9 +192,11 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
 import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } from './app/library/store.mjs';
 import { searchTracks } from './app/library/search.mjs';
+import { allPlaylists } from './app/library/store.mjs';
+import { toM3u8 } from './app/library/playlist.mjs';
 import {
-  supportsFolderGrant, requestFolder, storedFolder, grantState, reclaimFolder,
-  forgetFolder, startScan,
+  supportsFolderGrant, requestFolder, storedFolder, storedFolderName, grantState,
+  reclaimFolder, forgetFolder, startScan, adoptFolder, directoryFromDrop, persistStorage,
 } from './app/library/scan.mjs';
 
 const STRINGS = Object.freeze({
@@ -411,7 +416,17 @@ for (const eventName of ['dragenter', 'dragover']) {
 for (const eventName of ['dragleave', 'drop']) {
   drop.addEventListener(eventName, event => { event.preventDefault(); drop.classList.remove('drag'); });
 }
-drop.addEventListener('drop', event => {
+drop.addEventListener('drop', async event => {
+  // A dropped folder is the shortest path from "I have music" to "it plays",
+  // so it is treated exactly like the picker: remembered, then scanned.
+  const directory = await directoryFromDrop(event.dataTransfer);
+  if (directory) {
+    await adoptFolder(directory);
+    show('library');
+    await refreshLibrary();
+    await runScan(directory);
+    return;
+  }
   const [file] = event.dataTransfer.files;
   if (file) openMedia(file).catch(() => {});
 });
@@ -479,16 +494,25 @@ function albumHeading(track) {
 /** Render the visible rows. Grouping by album only applies to an unfiltered list. */
 async function renderLibrary() {
   const query = $('#lib-search').value;
-  const visible = searchTracks(libraryTracks, query);
-  if (!query) visible.sort((left, right) =>
+  const playlist = activePlaylist ? playlistRows.find(row => row.path === activePlaylist) : null;
+  let source = libraryTracks;
+  let missing = 0;
+  if (playlist) ({ found: source, missing } = tracksForPlaylist(playlist));
+
+  const visible = searchTracks(source, query);
+  // A playlist has a deliberate order; only the whole library is re-sorted.
+  if (!query && !playlist) visible.sort((left, right) =>
     String(left.albumKey).localeCompare(String(right.albumKey)) || compareAlbumOrder(left, right));
 
   queue = visible;
   const list = $('#lib-list');
   list.replaceChildren();
   $('#lib-count').textContent = query
-    ? `${visible.length} of ${libraryTracks.length}`
-    : `${libraryTracks.length} track${libraryTracks.length === 1 ? '' : 's'}`;
+    ? `${visible.length} of ${source.length}`
+    : `${source.length} track${source.length === 1 ? '' : 's'}`;
+  if (playlist && missing) {
+    reportScan(`${playlist.name}: ${missing} of ${playlist.entries.length} entries are not in this folder.`);
+  }
 
   if (!visible.length) {
     const empty = document.createElement('li');
@@ -503,7 +527,7 @@ async function renderLibrary() {
   const fragment = document.createDocumentFragment();
 
   for (const [index, track] of visible.entries()) {
-    if (!query && albumHeading(track) !== heading) {
+    if (!query && !playlist && albumHeading(track) !== heading) {
       heading = albumHeading(track);
       const group = document.createElement('li');
       group.className = 'lib-group';
@@ -550,6 +574,7 @@ async function renderLibrary() {
 async function refreshLibrary() {
   releaseArt();
   libraryTracks = await allTracks();
+  await refreshPlaylists();
   await renderLibrary();
 }
 
@@ -570,6 +595,7 @@ async function runScan(handle) {
     const summary = await scanning.done;
     reportScan(
       `${summary.tracks} tracks indexed in ${(summary.durationMs / 1000).toFixed(1)}s`
+      + (summary.playlists ? `, ${summary.playlists} playlist${summary.playlists === 1 ? '' : 's'}` : '')
       + (summary.failed ? `, ${summary.failed} unreadable` : '') + '.',
     );
     await refreshLibrary();
@@ -650,6 +676,89 @@ async function advance(step) {
   if (next >= 0 && next < queue.length) await playQueueAt(next);
 }
 
+
+// --------------------------------------------------------- playlists ----
+
+let playlistRows = [];
+
+async function refreshPlaylists() {
+  playlistRows = await allPlaylists();
+  const select = $('#lib-playlist');
+  select.hidden = playlistRows.length === 0;
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = `All tracks (${libraryTracks.length})`;
+  select.append(all);
+  for (const playlist of playlistRows) {
+    const option = document.createElement('option');
+    option.value = playlist.path;
+    option.textContent = `${playlist.name} (${playlist.entries.length})`;
+    select.append(option);
+  }
+  select.value = activePlaylist ?? '';
+}
+
+let activePlaylist = null;
+
+/**
+ * Resolve a playlist's entries against the index, keeping playlist order.
+ * An entry naming a file the index does not have is reported rather than
+ * silently dropped: a playlist that half-loads without saying so is worse
+ * than one that refuses.
+ */
+function tracksForPlaylist(playlist) {
+  const byPath = new Map(libraryTracks.map(track => [track.path, track]));
+  const found = [];
+  let missing = 0;
+  for (const entry of playlist.entries) {
+    const track = entry.path ? byPath.get(entry.path) : null;
+    if (track) found.push(track);
+    else missing += 1;
+  }
+  return { found, missing };
+}
+
+async function saveQueueAsPlaylist() {
+  if (!queue.length) { reportScan('There is nothing in the list to save.'); return; }
+  const name = prompt('Name this playlist', 'NakliAmp playlist');
+  if (!name) return;
+
+  const handle = await storedFolder();
+  if (!handle) { reportScan('Open your music folder before saving a playlist.'); return; }
+  if (await grantState(handle) !== 'granted' && await reclaimFolder(handle) !== 'granted') {
+    reportScan('Saving needs write access to your folder.');
+    return;
+  }
+
+  const fileName = `${name.replace(/[^\w \-.]/g, '_').trim() || 'playlist'}.m3u8`;
+  try {
+    const file = await handle.getFileHandle(fileName, { create: true });
+    const writable = await file.createWritable();
+    await writable.write(toM3u8(queue, { name }));
+    await writable.close();
+    reportScan(`Saved ${fileName} into your music folder.`);
+    await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not save the playlist: ${error.message}`);
+  }
+}
+
+$('#lib-playlist').addEventListener('change', async event => {
+  activePlaylist = event.target.value || null;
+  $('#lib-search').value = '';
+  await renderLibrary();
+});
+$('#lib-save').addEventListener('click', () => saveQueueAsPlaylist());
+$('#lib-reopen').addEventListener('click', async () => {
+  const handle = await storedFolder();
+  if (!handle) { await openLibrary({ prompt: true }); return; }
+  if (await reclaimFolder(handle) !== 'granted') { reportScan('The folder grant was not restored.'); return; }
+  $('#lib-reopen').hidden = true;
+  await persistStorage();
+  await runScan(handle);
+});
+
 $('#lib-list').addEventListener('click', event => {
   const row = event.target.closest('.lib-row');
   if (row) playQueueAt(Number(row.dataset.index)).catch(error => toast(error.message, 5000));
@@ -674,6 +783,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     open: input => openMedia(input, { autoplay: false }),
     openLibrary: () => openLibrary(),
     libraryTracks: () => libraryTracks.length,
+    playlists: () => playlistRows.length,
     state: () => engine.state(),
     play: () => engine.play(),
     pause: () => engine.pause(),
@@ -682,6 +792,41 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
 
 engine.setVolume(Number($('#volume').value));
 renderClock();
+
+/**
+ * Reopen the last folder on launch.
+ * A remembered folder should mean the library is simply there. The browser may
+ * still require a gesture to re-grant read access, so a scan is only started
+ * when the grant is already live; otherwise the indexed library is shown with
+ * one button to restore it.
+ */
+async function restoreSession() {
+  if (!supportsFolderGrant()) return;
+  let handle;
+  try {
+    handle = await storedFolder();
+  } catch {
+    return; // a browser with no usable IndexedDB is still a working player
+  }
+  if (!handle) return;
+
+  await refreshLibrary();
+  show('library');
+  const name = await storedFolderName();
+  const state = await grantState(handle);
+  if (state === 'granted') {
+    await persistStorage();
+    await runScan(handle);
+    return;
+  }
+  reportScan(
+    `${libraryTracks.length} tracks indexed from ${name || 'your folder'}. `
+    + 'Reopen the folder to play from it.',
+  );
+  $('#lib-reopen').hidden = false;
+}
+
+if (new URLSearchParams(location.search).get('harness') !== '1') restoreSession();
 </script>
 </body>
 </html>
