@@ -128,6 +128,21 @@ function defaultNativeAudioFactory({ url }) {
   return audio;
 }
 
+/**
+ * Whether the browser claims it can play a MIME type, asked without building
+ * any playback object. Injected factories are exempt: a test double decides for
+ * itself, and its own `canPlayType` is still consulted below.
+ */
+function canPlayNatively(mime) {
+  // `new Audio()` with no source starts no load, so this is a pure question.
+  if (typeof Audio !== 'function') return true;
+  try {
+    return Boolean(new Audio().canPlayType(mime));
+  } catch (_) {
+    return true;
+  }
+}
+
 function waitForNativeMetadata(audio, timeoutMs) {
   if (audio.readyState >= 1) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -201,10 +216,23 @@ function unprobedMetadata(file) {
   };
 }
 
+/**
+ * Software decoders for the R3 rung.
+ *
+ * Injected rather than imported, so the engine never depends on which decoders
+ * a build ships. The lean build passes the in-house PCM tier; the full build
+ * adds the wasm tier. Each decoder is:
+ *
+ *   { name, sniff(Uint8Array) -> string|null, decode(Uint8Array) -> Decoded }
+ *
+ * where Decoded is `{ sampleRate, channels: Float32Array[], frames }`.
+ */
 export function createNakliAmpEngine({
   version = DEFAULT_CONFIG.version,
   forcePath = 'auto',
   nativeAudioFactory = defaultNativeAudioFactory,
+  softwareDecoders = [],
+  audioContextFactory = () => new AudioContext(),
   events: externalEvents = null,
 } = {}) {
   if (!['auto', 'r1', 'r2'].includes(forcePath)) {
@@ -235,11 +263,55 @@ export function createNakliAmpEngine({
   let lastError = null;
   let latestLoadId = 0;
   let fellBackFrom = null;
+  let software = null;
 
   function preferredMode() {
     if (forcePath === 'r1') return 'r1';
     if (forcePath === 'r2') return 'r2';
     return reel.caps().audioDecoder ? 'r1' : 'r2';
+  }
+
+  function disposeSoftware() {
+    try { software?.source?.stop(); } catch (_) {}
+    try { software?.source?.disconnect(); } catch (_) {}
+    try { software?.gain?.disconnect(); } catch (_) {}
+    if (software) software.source = null;
+  }
+
+  /**
+   * Play a decoded buffer through Web Audio.
+   * A BufferSource is single-use, so every play builds a new one and the clock
+   * is kept as an offset plus the context's own time rather than read from the
+   * node, which reports nothing after it stops.
+   */
+  function softwarePlayback(decoded, name, size, container) {
+    const context = audioContextFactory();
+    const buffer = context.createBuffer(decoded.channels.length, decoded.frames, decoded.sampleRate);
+    for (const [index, channel] of decoded.channels.entries()) {
+      buffer.copyToChannel(channel.subarray(0, decoded.frames), index);
+    }
+    const gain = context.createGain();
+    gain.connect(context.destination);
+    return {
+      context, buffer, gain,
+      source: null,
+      name, size, container,
+      decoderName: decoded.decoderName,
+      offsetS: 0,
+      startedAt: 0,
+      playing: false,
+      volume: 1,
+      muted: false,
+      durationS: decoded.frames / decoded.sampleRate,
+      sampleRate: decoded.sampleRate,
+      channels: decoded.channels.length,
+    };
+  }
+
+  function softwarePosition() {
+    if (!software) return 0;
+    const elapsed = software.playing ? software.context.currentTime - software.startedAt : 0;
+    return Math.min(software.durationS, software.offsetS + elapsed);
   }
 
   function disposeNative() {
@@ -276,6 +348,8 @@ export function createNakliAmpEngine({
       );
     }
     const track = selectAudioTrack(metadata);
+    disposeSoftware();
+    software = null;
     if (hasVideoTrack(metadata)) {
       throw new NakliAmpError(
         'VideoMediaDeferredError',
@@ -315,6 +389,22 @@ export function createNakliAmpEngine({
     const track = selectAudioTrack(metadata);
     const videoIgnored = hasVideoTrack(metadata);
     const mime = nativeMime(file);
+
+    // Ask whether the browser can play this before handing it anything. Building
+    // the element first starts a load that is already known to fail, which costs
+    // a wasted fetch and leaves a media error in the console for a file the
+    // ladder goes on to play perfectly well on the next rung.
+    // Only when the real element is in play. An injected factory is the
+    // authority on what it can accept, and its own `canPlayType` is consulted
+    // below; probing the browser instead would overrule the injection.
+    if (mime && nativeAudioFactory === defaultNativeAudioFactory && !canPlayNatively(mime)) {
+      throw new NakliAmpError(
+        'NativeCodecUnsupportedError',
+        'ERR_NAKLIAMP_NATIVE_UNSUPPORTED',
+        `The browser native audio path does not support ${track.codec || extensionOf(file.name) || 'this codec'}.`,
+      );
+    }
+
     const candidateUrl = URL.createObjectURL(file);
     let candidateAudio;
     let adopted = false;
@@ -341,6 +431,8 @@ export function createNakliAmpEngine({
       }
       reel.pause();
       disposeNative();
+      disposeSoftware();
+      software = null;
       nativeAudio = candidateAudio;
       nativeUrl = candidateUrl;
       nativeMetadata = {
@@ -368,6 +460,79 @@ export function createNakliAmpEngine({
     }
   }
 
+  /**
+   * R3: decode in software.
+   * Reached only when the engine could not demux the file and the browser could
+   * not play it either, which is exactly the case a software decoder exists for.
+   */
+  async function loadR3(input, loadId) {
+    if (!softwareDecoders.length) {
+      throw new NakliAmpError(
+        'SoftwareDecodeUnavailableError',
+        'ERR_NAKLIAMP_NO_SOFTWARE_DECODER',
+        'This build has no software decoder for this file.',
+      );
+    }
+    const file = await localFile(input);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+
+    let decoded = null;
+    let lastFailure = null;
+    for (const decoder of softwareDecoders) {
+      let container = null;
+      try {
+        container = decoder.sniff(bytes);
+      } catch (_) {
+        container = null;
+      }
+      if (!container) continue;
+      try {
+        decoded = { ...decoder.decode(bytes), decoderName: decoder.name, container };
+        break;
+      } catch (error) {
+        // A decoder that recognised the file and then failed has the most
+        // specific thing to say about it, so its reason is the one kept.
+        lastFailure = error;
+      }
+    }
+    if (!decoded) {
+      throw lastFailure ?? new NakliAmpError(
+        'SoftwareDecodeUnsupportedError',
+        'ERR_NAKLIAMP_SOFTWARE_UNSUPPORTED',
+        'No software decoder in this build recognises this file.',
+      );
+    }
+    if (loadId !== latestLoadId) {
+      throw new NakliAmpError(
+        'SupersededLoadError',
+        'ERR_NAKLIAMP_LOAD_SUPERSEDED',
+        'A newer track selection replaced this request.',
+      );
+    }
+
+    reel.pause();
+    disposeNative();
+    disposeSoftware();
+    software = softwarePlayback(decoded, file.name, file.size, decoded.container);
+    mode = 'r3';
+    status = 'ready';
+    lastError = null;
+    events.emit('track:loaded', {
+      name: file.name,
+      container: decoded.container,
+      codec: 'pcm',
+      path: mode,
+    });
+    return structuredClone({
+      name: file.name,
+      size: file.size,
+      duration: software.durationS,
+      container: decoded.container,
+      tracks: [{ type: 'audio', codec: 'pcm', sampleRate: decoded.sampleRate, channels: decoded.channels.length }],
+      path: mode,
+    });
+  }
+
   async function load(input) {
     const loadId = ++latestLoadId;
     status = 'loading';
@@ -389,9 +554,26 @@ export function createNakliAmpEngine({
           events.emit('playback:fallback', { from: 'r1', to: 'r2', code: fellBackFrom });
           return { ...loaded, fellBackFrom };
         } catch (fallbackError) {
-          // Report the failure the person can act on: if the native path also
-          // refused, its reason is the specific one.
           if (loadId !== latestLoadId) throw fallbackError;
+          // R3: the browser refused too, so try decoding it ourselves.
+          if (softwareDecoders.length && !FALLBACK_BLOCKED.has(fallbackError?.code)) {
+            try {
+              const loaded = await loadR3(input, loadId);
+              fellBackFrom = error?.code ?? 'ERR_NAKLIAMP_R1_FAILED';
+              events.emit('playback:fallback', { from: 'r2', to: 'r3', code: fallbackError?.code });
+              return { ...loaded, fellBackFrom };
+            } catch (softwareError) {
+              if (loadId !== latestLoadId) throw softwareError;
+              // Report the native refusal, not the software one: the browser's
+              // reason is the more useful of the two for a file it knows.
+              if (softwareError?.code === 'ERR_NAKLIAMP_SOFTWARE_UNSUPPORTED') {
+                recordError(fallbackError);
+                throw fallbackError;
+              }
+              recordError(softwareError);
+              throw softwareError;
+            }
+          }
           recordError(fallbackError);
           throw fallbackError;
         }
@@ -410,7 +592,18 @@ export function createNakliAmpEngine({
   }
 
   async function play() {
-    if (mode === 'r1') await reel.play();
+    if (mode === 'r3' && software) {
+      if (software.context.state === 'suspended') await software.context.resume();
+      disposeSoftware();
+      const source = software.context.createBufferSource();
+      source.buffer = software.buffer;
+      source.connect(software.gain);
+      source.onended = () => { if (software?.playing) software.playing = false; };
+      source.start(0, Math.min(software.offsetS, software.durationS));
+      software.source = source;
+      software.startedAt = software.context.currentTime;
+      software.playing = true;
+    } else if (mode === 'r1') await reel.play();
     else if (mode === 'r2' && nativeAudio) await nativeAudio.play();
     else throw new NakliAmpError('NoTrackError', 'ERR_NAKLIAMP_NO_TRACK', 'Open an audio file before playing.');
     status = 'playing';
@@ -418,6 +611,11 @@ export function createNakliAmpEngine({
   }
 
   function pause() {
+    if (mode === 'r3' && software) {
+      software.offsetS = softwarePosition();
+      software.playing = false;
+      disposeSoftware();
+    }
     if (mode === 'r1') reel.pause();
     if (mode === 'r2') nativeAudio?.pause();
     if (mode) status = 'paused';
@@ -427,22 +625,34 @@ export function createNakliAmpEngine({
   async function seek(positionS) {
     const duration = state().media.duration;
     const next = Math.max(0, Math.min(Number.isFinite(duration) ? duration : Infinity, Number(positionS) || 0));
-    if (mode === 'r1') await reel.seek(next);
+    if (mode === 'r3' && software) {
+      const wasPlaying = software.playing;
+      disposeSoftware();
+      software.offsetS = next;
+      software.playing = false;
+      if (wasPlaying) await play();
+    } else if (mode === 'r1') await reel.seek(next);
     else if (mode === 'r2' && nativeAudio) nativeAudio.currentTime = next;
     else throw new NakliAmpError('NoTrackError', 'ERR_NAKLIAMP_NO_TRACK', 'Open an audio file before seeking.');
     events.emit('transport:seek', { positionS: next, path: mode });
+  }
+
+  function applySoftwareGain() {
+    if (software?.gain) software.gain.gain.value = software.muted ? 0 : software.volume;
   }
 
   function setVolume(value) {
     const next = Math.max(0, Math.min(1, Number(value) || 0));
     if (mode === 'r1') reel.setVolume(next);
     if (nativeAudio) nativeAudio.volume = next;
+    if (software) { software.volume = next; applySoftwareGain(); }
   }
 
   function setMuted(value) {
     const next = !!value;
     if (mode === 'r1') reel.setMuted(next);
     if (nativeAudio) nativeAudio.muted = next;
+    if (software) { software.muted = next; applySoftwareGain(); }
   }
 
   function state() {
@@ -471,6 +681,41 @@ export function createNakliAmpEngine({
           droppedFrames: upstream.playback.audio.droppedFrames,
           lastError: upstream.playback.lastError,
         },
+        error: lastError,
+      });
+    }
+    if (mode === 'r3' && software) {
+      return structuredClone({
+        version,
+        status: software.playing ? 'playing' : status === 'ready' ? 'ready' : 'paused',
+        path: mode,
+        media: {
+          name: software.name,
+          fingerprint: null,
+          duration: software.durationS,
+          size: software.size,
+          container: software.container,
+          mimeType: null,
+        },
+        track: { type: 'audio', codec: 'pcm', sampleRate: software.sampleRate, channels: software.channels },
+        clock: {
+          positionS: softwarePosition(),
+          playing: software.playing,
+          rate: 1,
+          volume: software.volume,
+          muted: software.muted,
+        },
+        honesty: {
+          container: software.container,
+          codec: 'pcm',
+          decode: `software decode (${software.decoderName})`,
+          output: 'Web Audio',
+          gapless: false,
+          localOnly: true,
+          fellBackFrom,
+          videoIgnored: false,
+        },
+        diagnostics: { consumedFrames: null, droppedFrames: null, lastError: null },
         error: lastError,
       });
     }

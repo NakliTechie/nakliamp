@@ -22,6 +22,9 @@
 //      quietly retried, so the refusal keeps saying something true.
 
 import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+import { decodePcm, sniffPcm } from '../app/decode/pcm.mjs';
+
+const SOFTWARE_DECODERS = [{ name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm }];
 
 const result = document.querySelector('#result');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -78,6 +81,7 @@ function refusingAudio() {
 
 async function run() {
   const report = {};
+  void SOFTWARE_DECODERS;
 
   // 1. An audio-only file the engine understands stays on the engine path.
   {
@@ -125,6 +129,51 @@ async function run() {
     const loaded = await engine.load(await fixture('audio-opus.mka'));
     assert(loaded.path === 'r2', 'The forced native path did not load the Matroska fixture.');
     report.matroskaPath = loaded.path;
+  }
+
+  // 6. R3: a container no browser decodes plays through the software tier.
+  //    These three fixtures were checked against this browser directly: both
+  //    `canPlayType` and `decodeAudioData` refuse all of them.
+  for (const [name, container] of [['audio-pcm.aiff', 'aiff'], ['audio-pcm.caf', 'caf'], ['audio-pcm.au', 'au']]) {
+    const element = document.createElement('audio');
+    const mime = { aiff: 'audio/aiff', caf: 'audio/x-caf', au: 'audio/basic' }[container];
+    assert(!element.canPlayType(mime), `${name}: this browser now plays ${mime}, so the gate is testing nothing.`);
+
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: SOFTWARE_DECODERS });
+    const loaded = await engine.load(await fixture(name));
+    const state = engine.state();
+
+    assert(loaded.path === 'r3', `${name} loaded on ${loaded.path}, expected r3.`);
+    assert(state.honesty.decode.includes('software decode'), `${name}: strip hid the software path.`);
+    assert(state.media.duration > 0.1, `${name}: decoded to ${state.media.duration}s.`);
+    assert(state.track.sampleRate === 48000, `${name}: sample rate ${state.track.sampleRate}.`);
+
+    await engine.play();
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert(engine.state().clock.playing, `${name}: did not report playing.`);
+    assert(engine.state().clock.positionS > 0, `${name}: the software clock did not advance.`);
+
+    engine.pause();
+    assert(!engine.state().clock.playing, `${name}: did not pause.`);
+    const held = engine.state().clock.positionS;
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert(Math.abs(engine.state().clock.positionS - held) < 0.01, `${name}: the clock ran while paused.`);
+
+    await engine.seek(0.05);
+    assert(Math.abs(engine.state().clock.positionS - 0.05) < 0.01, `${name}: seek did not land.`);
+
+    engine.setVolume(0.5);
+    assert(engine.state().clock.volume === 0.5, `${name}: volume did not apply.`);
+    report[`${container}Path`] = loaded.path;
+  }
+
+  // A build with no software decoders must refuse rather than pretend.
+  {
+    let failure = null;
+    const engine = createNakliAmpEngine({ version: 'gate', nativeAudioFactory: () => refusingAudio() });
+    try { await engine.load(await fixture('audio-pcm.aiff')); } catch (error) { failure = error; }
+    assert(failure, 'A build with no software decoder loaded an undecodable file.');
+    report.noDecoderCode = failure.code;
   }
 
   // 5. A format no browser can decode is refused by name, not silently retried.

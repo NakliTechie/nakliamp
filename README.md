@@ -14,7 +14,7 @@ NakliAmp tries every rung before it gives up on a file:
 |---|---|---|
 | R1 | WebCodecs via the Reel engine | Hardware decode, sample-accurate clock, full detail in the honesty strip |
 | R2 | Native element passthrough | The browser's own decoder. Plays, loses gapless, and the strip says so |
-| R3 | Software decode | Specced, not built. See below |
+| R3 | Software decode | NakliAmp decodes it itself when nothing else will |
 | R4 | Named refusal | It says which file, which rung, and why |
 
 Three consequences worth knowing:
@@ -22,9 +22,15 @@ Three consequences worth knowing:
 - **A container the engine has never heard of is not automatically a dead end.**
   If your browser can play it, NakliAmp plays it and tells you it fell back.
 - **A file with video plays its audio.** Music videos and rips are not refused.
-- **A refusal stays a refusal.** WMA and Monkey's Audio have no browser decoder,
-  so they are named and refused rather than retried into a vaguer error. R3 is
-  where they will eventually play.
+- **R3 decodes what the browser will not.** AIFF, AIFC, CAF and AU play here.
+  None of them are exotic — AIFF is what a Mac rips to, CAF is what Logic and
+  QuickTime write, AU is decades of Unix audio — and Chrome decodes none of them
+  by either path. They are uncompressed, so closing that gap needed a header
+  parser, not a codec, and it costs no download.
+- **A refusal stays a refusal.** WMA, Monkey's Audio, WavPack, Musepack and DSD
+  are compressed formats no browser decodes, so they are still named and
+  refused. They need a real decoder, which is what the second build artifact
+  will carry.
 
 The honesty strip names the actual path for every track — container, codec,
 decode path, output — plus why a file left the engine path and whether a video
@@ -76,6 +82,9 @@ kept and counted as unresolved rather than followed or silently dropped.
 
 ## Two builds
 
+R3 decoders are plugged in rather than built in, so which formats a build can
+decode is a property of the build, not of the engine.
+
 **Single file.** `dist/nakliamp.html` is one self-contained file: the app, the
 engine, and the demuxer, about 0.8 MB, with no external references at all. Save
 it anywhere and open it, including straight off your filesystem over `file://`.
@@ -125,7 +134,8 @@ node scripts/verify-deployment.mjs http://127.0.0.1:8787/
 
 ## Not built yet
 
-Stated plainly rather than implied by omission: R3 software decode, gapless
-playback, the equaliser, playlists as `.m3u8` files in your folder, Media
+Stated plainly rather than implied by omission: R3 for compressed formats
+(WMA, APE, WavPack, Musepack, DSD — the second `nakliamp-full.html` artifact),
+gapless playback, the equaliser, playlists as `.m3u8` files in your folder, Media
 Session integration, and the compact player. See `plan/cliamp-parity.md` for
 the full feature target and `plan/workplan.md` for the order.

@@ -185,11 +185,12 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
   <footer data-t="privacy">Local playback only · no account · no cookies · no analytics</footer>
 </div>
 
-<input id="file-input" type="file" accept="audio/*,.mp3,.flac,.m4a,.aac,.ogg,.opus,.wav,.mka,.wma,.ape" hidden>
+<input id="file-input" type="file" accept="audio/*,.mp3,.flac,.m4a,.aac,.ogg,.opus,.wav,.mka,.aiff,.aif,.caf,.au,.wma,.ape" hidden>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script type="module">
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
+import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';
 import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } from './app/library/store.mjs';
 import { searchTracks } from './app/library/search.mjs';
 import { allPlaylists } from './app/library/store.mjs';
@@ -230,7 +231,13 @@ document.querySelectorAll('[data-t]').forEach(element => { element.textContent =
 
 const $ = selector => document.querySelector(selector);
 const screens = ['empty', 'player', 'refusal', 'library'];
-const engine = createNakliAmpEngine({ version: VERSION });
+// R3 decoders. The lean build ships the in-house PCM tier, which closes the
+// AIFF, AIFC, CAF and AU gap at no download cost. The full build appends the
+// wasm tier for the compressed long tail.
+const SOFTWARE_DECODERS = [
+  { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm },
+];
+const engine = createNakliAmpEngine({ version: VERSION, softwareDecoders: SOFTWARE_DECODERS });
 let uiLoadId = 0;
 let toastTimer = 0;
 let frameId = 0;
@@ -282,6 +289,7 @@ function honestyMarkup(state) {
     const token = document.createElement('span');
     token.textContent = part;
     if (index === 2) token.className = state.path === 'r1' ? 'active' : 'warning';
+    if (index === 2 && state.path === 'r3') token.className = 'active';
     host.appendChild(token);
   });
   if (state.honesty.gapless === false) {
@@ -304,7 +312,7 @@ function renderTrack(state) {
   ].filter(Boolean).join(' · ');
   $('#duration').textContent = formatTime(state.media.duration);
   $('#seek').max = String(Math.max(0.01, state.media.duration || 0.01));
-  $('#path-chip').textContent = state.path === 'r1' ? 'R1 · REEL ENGINE' : 'R2 · NATIVE PASSTHROUGH';
+  $('#path-chip').textContent = { r1: 'R1 · REEL ENGINE', r2: 'R2 · NATIVE PASSTHROUGH', r3: 'R3 · SOFTWARE DECODE' }[state.path] ?? 'R2 · NATIVE PASSTHROUGH';
   honestyMarkup(state);
   show('player');
 }
@@ -362,7 +370,7 @@ async function chooseFile() {
     try {
       const [handle] = await showOpenFilePicker({
         multiple: false,
-        types: [{ description: 'Audio files', accept: { 'audio/*': ['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.mka', '.wma', '.ape'] } }],
+        types: [{ description: 'Audio files', accept: { 'audio/*': ['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.mka', '.aiff', '.aif', '.caf', '.au', '.wma', '.ape'] } }],
       });
       if (handle) await openMedia(handle);
     } catch (error) {
