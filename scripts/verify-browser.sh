@@ -48,7 +48,7 @@ node "$repo_root/scripts/verify-r2-sessions.mjs"
 node "$repo_root/scripts/verify-delivery.mjs"
 node "$repo_root/scripts/build-single-file.mjs"
 node "$repo_root/scripts/verify-single-file.mjs"
-node --test "$repo_root/test/metadata.test.mjs" "$repo_root/test/store.test.mjs"
+node --test "$repo_root"/test/*.test.mjs
 "$python_bin" -m http.server "$verify_port" --bind "$verify_host" >"$profile_root/server.log" 2>&1 &
 server_pid=$!
 
