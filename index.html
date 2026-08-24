@@ -101,6 +101,9 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 .lib-row .who b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-row .who span{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lib-row .dur{font:11px var(--mono);color:var(--faint);flex:none}
+.row-tools{display:flex;gap:4px;flex:none}
+.row-tools button{width:24px;height:24px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;font:11px var(--mono);line-height:1;padding:0}
+.row-tools button:hover{border-color:var(--accent);color:var(--accent)}
 .lib-empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .lib-note{margin:14px 0 0;font-size:12px;color:var(--faint)}
 
@@ -180,6 +183,8 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
         <button class="btn primary" id="lib-reopen" type="button" hidden>Reopen folder</button>
         <select class="lib-search" id="lib-playlist" aria-label="Playlists" style="flex:0 1 200px" hidden></select>
         <button class="btn" id="lib-save" type="button">Save as playlist</button>
+        <button class="btn" id="lib-rename" type="button" hidden>Rename</button>
+        <button class="btn" id="lib-delete" type="button" hidden>Delete</button>
         <button class="btn" id="lib-rescan" type="button">Rescan</button>
         <button class="btn" id="lib-forget" type="button">Forget folder</button>
         <button class="btn" id="lib-close" type="button">Close</button>
@@ -541,6 +546,8 @@ async function renderLibrary() {
   $('#lib-count').textContent = query
     ? `${visible.length} of ${source.length}`
     : `${source.length} track${source.length === 1 ? '' : 's'}`;
+  $('#lib-rename').hidden = !playlist;
+  $('#lib-delete').hidden = !playlist;
   if (playlist && missing) {
     reportScan(`${playlist.name}: ${missing} of ${playlist.entries.length} entries are not in this folder.`);
   }
@@ -597,6 +604,22 @@ async function renderLibrary() {
 
     row.append(number, cover, who, duration);
     item.append(row);
+    if (playlist) {
+      const tools = document.createElement('span');
+      tools.className = 'row-tools';
+      for (const [label, action, title] of [
+        ['\u2191', 'up', 'Move up'], ['\u2193', 'down', 'Move down'], ['\u00d7', 'remove', 'Remove from playlist'],
+      ]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = action;
+        button.dataset.index = String(index);
+        button.title = title;
+        button.textContent = label;
+        tools.append(button);
+      }
+      row.append(tools);
+    }
     fragment.append(item);
   }
   list.append(fragment);
@@ -833,7 +856,117 @@ $('#lib-reopen').addEventListener('click', async () => {
   await runScan(handle);
 });
 
+
+// ------------------------------------------------- playlist manager ----
+
+/** Write `tracks` to `path` as M3U8, reusing the folder grant. */
+async function writePlaylistFile(path, tracks, name) {
+  const handle = await storedFolder();
+  if (!handle) throw new Error('Open your music folder first.');
+  if (await grantState(handle) !== 'granted' && await reclaimFolder(handle) !== 'granted') {
+    throw new Error('Saving needs write access to your folder.');
+  }
+  const segments = path.split('/');
+  const fileName = segments.pop();
+  let directory = handle;
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  const file = await directory.getFileHandle(fileName, { create: true });
+  const writable = await file.createWritable();
+  await writable.write(toM3u8(tracks, { name, base: segments.join('/') }));
+  await writable.close();
+  return handle;
+}
+
+async function removeFromPlaylist(index) {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const { found } = tracksForPlaylist(playlist);
+  const next = found.filter((_, position) => position !== index);
+  await persistPlaylist(playlist, next, `Removed 1 track from ${playlist.name}.`);
+}
+
+async function movePlaylistTrack(index, step) {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const { found } = tracksForPlaylist(playlist);
+  const target = index + step;
+  if (target < 0 || target >= found.length) return;
+  const next = [...found];
+  [next[index], next[target]] = [next[target], next[index]];
+  await persistPlaylist(playlist, next, null);
+}
+
+/** Write the playlist back to disk, then rescan so the index matches the file. */
+async function persistPlaylist(playlist, tracks, message) {
+  try {
+    const handle = await writePlaylistFile(playlist.path, tracks, playlist.name);
+    if (message) reportScan(message);
+    await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not update ${playlist.name}: ${error.message}`);
+  }
+}
+
+async function renamePlaylist() {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  const name = prompt('Rename playlist', playlist.name);
+  if (!name || name === playlist.name) return;
+
+  const directory = playlist.path.split('/').slice(0, -1).join('/');
+  const safe = name.replace(/[^\w \-.]/g, '_').trim() || 'playlist';
+  const nextPath = `${directory ? `${directory}/` : ''}${safe}.m3u8`;
+  const { found } = tracksForPlaylist(playlist);
+  try {
+    await writePlaylistFile(nextPath, found, name);
+    await deletePlaylistFile(playlist.path);
+    activePlaylist = nextPath;
+    reportScan(`Renamed to ${safe}.m3u8.`);
+    const handle = await storedFolder();
+    if (handle) await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not rename: ${error.message}`);
+  }
+}
+
+async function deletePlaylistFile(path) {
+  const handle = await storedFolder();
+  if (!handle) throw new Error('Open your music folder first.');
+  const segments = path.split('/');
+  const fileName = segments.pop();
+  let directory = handle;
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  await directory.removeEntry(fileName);
+}
+
+async function deleteActivePlaylist() {
+  const playlist = playlistRows.find(row => row.path === activePlaylist);
+  if (!playlist) return;
+  // A playlist is a file on disk, so removing it is a real deletion. Confirm.
+  if (!confirm(`Delete the playlist file ${playlist.path}? The tracks stay where they are.`)) return;
+  try {
+    await deletePlaylistFile(playlist.path);
+    activePlaylist = null;
+    reportScan(`Deleted ${playlist.name}.`);
+    const handle = await storedFolder();
+    if (handle) await runScan(handle);
+  } catch (error) {
+    reportScan(`Could not delete: ${error.message}`);
+  }
+}
+
+$('#lib-rename').addEventListener('click', () => renamePlaylist());
+$('#lib-delete').addEventListener('click', () => deleteActivePlaylist());
+
 $('#lib-list').addEventListener('click', event => {
+  const tool = event.target.closest('.row-tools button');
+  if (tool) {
+    event.stopPropagation();
+    const index = Number(tool.dataset.index);
+    if (tool.dataset.action === 'remove') removeFromPlaylist(index);
+    else movePlaylistTrack(index, tool.dataset.action === 'up' ? -1 : 1);
+    return;
+  }
   const row = event.target.closest('.lib-row');
   if (row) playQueueAt(Number(row.dataset.index)).catch(error => toast(error.message, 5000));
 });
