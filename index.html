@@ -79,6 +79,30 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 .toast[hidden]{display:none}
 @media(max-width:760px){.topbar{padding:0 18px}.player-grid{grid-template-columns:1fr}.art{max-width:310px;width:74vw;margin:auto}.track{text-align:center}.honesty,.transport{justify-content:center}.open-another{margin-left:0}.volume-wrap{max-width:130px}main{padding:28px 18px 46px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+
+/* Library */
+.library{max-width:1080px;margin:auto}
+.lib-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.lib-head h2{font-family:var(--display);font-size:22px;margin:0;letter-spacing:-.03em}
+.lib-search{flex:1;min-width:190px;min-height:42px;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text)}
+.lib-search::placeholder{color:var(--faint)}
+.lib-count{font:10px var(--mono);color:var(--faint);border:1px solid var(--line);padding:5px 9px;border-radius:999px;white-space:nowrap}
+.lib-scan{margin:0 0 14px;font:11px var(--mono);color:var(--muted)}
+.lib-scan[hidden]{display:none}
+.lib-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:rgba(31,26,21,.6)}
+.lib-group{padding:9px 16px;font:10px var(--mono);letter-spacing:.06em;color:var(--faint);background:var(--panel-2);border-top:1px solid var(--line)}
+.lib-list>.lib-group:first-child{border-top:0}
+.lib-row{display:flex;align-items:center;gap:12px;width:100%;padding:9px 16px;border:0;border-top:1px solid rgba(58,48,38,.5);background:none;text-align:left;cursor:pointer}
+.lib-row:hover{background:var(--panel-2)}
+.lib-row[aria-current="true"]{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.lib-row .no{width:26px;text-align:right;font:11px var(--mono);color:var(--faint);flex:none}
+.lib-row .cover{width:34px;height:34px;border-radius:7px;flex:none;object-fit:cover;background:var(--panel-2);border:1px solid var(--line)}
+.lib-row .who{min-width:0;flex:1}
+.lib-row .who b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lib-row .who span{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lib-row .dur{font:11px var(--mono);color:var(--faint);flex:none}
+.lib-empty{padding:28px 16px;text-align:center;color:var(--muted)}
+.lib-note{margin:14px 0 0;font-size:12px;color:var(--faint)}
 </style>
 </head>
 <body>
@@ -98,6 +122,7 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
         <p id="drop-detail" data-t="empty.drop">Drop an audio file here, or choose one from your device.</p>
         <div class="actions">
           <button class="btn primary" id="open-file" type="button" data-t="action.open">Open audio file</button>
+          <button class="btn" id="open-folder" type="button" data-t="action.folder">Open a music folder</button>
         </div>
         <div class="fine">MP3 · FLAC · AAC/M4A · OPUS · OGG/VORBIS · WAV · MKA</div>
       </div>
@@ -122,11 +147,26 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
             <button class="round" id="forward" type="button" aria-label="Forward 10 seconds">+10</button>
             <label class="volume-wrap"><span aria-hidden="true">◖</span><input id="volume" type="range" min="0" max="1" step="0.02" value="0.8" aria-label="Volume"></label>
             <button class="btn open-another" id="open-another" type="button" data-t="action.another">Open another</button>
+            <button class="btn" id="show-library" type="button" data-t="action.library">Library</button>
           </div>
         </div>
       </div>
     </section>
 
+
+    <section class="screen library" id="library" aria-labelledby="library-title">
+      <div class="lib-head">
+        <h2 id="library-title">Library</h2>
+        <input class="lib-search" id="lib-search" type="search" placeholder="Search your library" aria-label="Search your library" autocomplete="off">
+        <span class="lib-count" id="lib-count"></span>
+        <button class="btn" id="lib-rescan" type="button">Rescan</button>
+        <button class="btn" id="lib-forget" type="button">Forget folder</button>
+        <button class="btn" id="lib-close" type="button">Close</button>
+      </div>
+      <p class="lib-scan" id="lib-scan" hidden></p>
+      <ul class="lib-list" id="lib-list"></ul>
+      <p class="lib-note">Your folder is read on your device. Nothing is uploaded, and the index never leaves this browser.</p>
+    </section>
     <section class="screen refusal" id="refusal" aria-labelledby="refusal-title">
       <div class="code" id="refusal-code">ERR_NAKLIAMP_UNKNOWN</div>
       <h2 id="refusal-title" data-t="refusal.title">This track stays closed.</h2>
@@ -147,6 +187,12 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 
 <script type="module">
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
+import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } from './app/library/store.mjs';
+import { searchTracks } from './app/library/search.mjs';
+import {
+  supportsFolderGrant, requestFolder, storedFolder, grantState, reclaimFolder,
+  forgetFolder, startScan, lastScan,
+} from './app/library/scan.mjs';
 
 const STRINGS = Object.freeze({
   en: Object.freeze({
@@ -156,6 +202,11 @@ const STRINGS = Object.freeze({
     'action.open': 'Open audio file',
     'action.another': 'Open another',
     'action.different': 'Choose a different file',
+    'action.folder': 'Open a music folder',
+    'action.library': 'Library',
+    'library.none': 'No music folder yet. Open one and NakliAmp will index it here.',
+    'library.empty': 'No track matches that search.',
+    'library.nogrant': 'This browser cannot grant a folder. Open single tracks instead, or use a Chromium browser for the library.',
     'player.now': 'Now playing locally',
     'refusal.title': 'This track stays closed.',
     'refusal.promise': 'Nothing was uploaded.',
@@ -173,7 +224,7 @@ const t = key => STRINGS[locale]?.[key] ?? STRINGS.en[key] ?? key;
 document.querySelectorAll('[data-t]').forEach(element => { element.textContent = t(element.dataset.t); });
 
 const $ = selector => document.querySelector(selector);
-const screens = ['empty', 'player', 'refusal'];
+const screens = ['empty', 'player', 'refusal', 'library'];
 const engine = createNakliAmpEngine({ version: VERSION });
 let uiLoadId = 0;
 let toastTimer = 0;
@@ -248,7 +299,7 @@ function renderTrack(state) {
   ].filter(Boolean).join(' · ');
   $('#duration').textContent = formatTime(state.media.duration);
   $('#seek').max = String(Math.max(0.01, state.media.duration || 0.01));
-  $('#path-chip').textContent = state.path === 'r1' ? 'R1 · REEL ENGINE' : 'R2 · NATIVE FALLBACK';
+  $('#path-chip').textContent = state.path === 'r1' ? 'R1 · REEL ENGINE' : 'R2 · NATIVE PASSTHROUGH';
   honestyMarkup(state);
   show('player');
 }
@@ -261,14 +312,22 @@ function renderClock() {
     $('#play').textContent = state.clock.playing ? 'Ⅱ' : '▶';
     $('#play').setAttribute('aria-label', state.clock.playing ? 'Pause' : 'Play');
   }
+  if (state.path && queueIndex >= 0 && state.media.duration
+    && state.clock.positionS >= state.media.duration - 0.25 && !state.clock.playing) {
+    if (!advancing) {
+      advancing = true;
+      advance(1).finally(() => { advancing = false; });
+    }
+  }
   frameId = requestAnimationFrame(renderClock);
 }
+let advancing = false;
 
 function showRefusal(error) {
   const code = error?.code || 'ERR_NAKLIAMP_UNKNOWN';
   $('#refusal-code').textContent = code;
   $('#refusal-message').textContent = error?.message || 'NakliAmp could not open this audio file.';
-  $('#path-chip').textContent = 'R3 · NAMED REFUSAL';
+  $('#path-chip').textContent = 'R4 · NAMED REFUSAL';
   show('refusal');
   toast(t('toast.error'));
 }
@@ -376,6 +435,9 @@ const KEYMAP = Object.freeze({
     $('#volume').value = String(next); engine.setVolume(next);
   },
   m: () => engine.setMuted(!engine.state().clock.muted),
+  l: () => openLibrary(),
+  n: () => advance(1),
+  p: () => advance(-1),
 });
 addEventListener('keydown', event => {
   if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
@@ -384,6 +446,228 @@ addEventListener('keydown', event => {
   event.preventDefault();
   action();
 });
+
+
+// ---------------------------------------------------------------- library ----
+
+let libraryTracks = [];
+let queue = [];
+let queueIndex = -1;
+let scanning = null;
+const artUrls = new Map();
+
+function releaseArt() {
+  for (const url of artUrls.values()) URL.revokeObjectURL(url);
+  artUrls.clear();
+}
+
+async function artUrlFor(track) {
+  if (!track.artKey) return null;
+  if (artUrls.has(track.artKey)) return artUrls.get(track.artKey);
+  const blob = await getArt(track.artKey);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  artUrls.set(track.artKey, url);
+  return url;
+}
+
+function albumHeading(track) {
+  return [track.album || 'Unknown album', track.albumArtist || track.artist || 'Unknown artist']
+    .join(' \u00b7 ');
+}
+
+/** Render the visible rows. Grouping by album only applies to an unfiltered list. */
+async function renderLibrary() {
+  const query = $('#lib-search').value;
+  const visible = searchTracks(libraryTracks, query);
+  if (!query) visible.sort((left, right) =>
+    String(left.albumKey).localeCompare(String(right.albumKey)) || compareAlbumOrder(left, right));
+
+  queue = visible;
+  const list = $('#lib-list');
+  list.replaceChildren();
+  $('#lib-count').textContent = query
+    ? `${visible.length} of ${libraryTracks.length}`
+    : `${libraryTracks.length} track${libraryTracks.length === 1 ? '' : 's'}`;
+
+  if (!visible.length) {
+    const empty = document.createElement('li');
+    empty.className = 'lib-empty';
+    empty.textContent = libraryTracks.length ? t('library.empty') : t('library.none');
+    list.append(empty);
+    return;
+  }
+
+  const playingId = queue[queueIndex]?.id ?? null;
+  let heading = null;
+  const fragment = document.createDocumentFragment();
+
+  for (const [index, track] of visible.entries()) {
+    if (!query && albumHeading(track) !== heading) {
+      heading = albumHeading(track);
+      const group = document.createElement('li');
+      group.className = 'lib-group';
+      group.textContent = heading;
+      fragment.append(group);
+    }
+
+    const item = document.createElement('li');
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'lib-row';
+    row.dataset.index = String(index);
+    if (track.id === playingId) row.setAttribute('aria-current', 'true');
+
+    const number = document.createElement('span');
+    number.className = 'no';
+    number.textContent = track.trackNo === null ? '' : String(track.trackNo);
+
+    const cover = document.createElement('img');
+    cover.className = 'cover';
+    cover.alt = '';
+    cover.loading = 'lazy';
+    artUrlFor(track).then(url => { if (url) cover.src = url; });
+
+    const who = document.createElement('span');
+    who.className = 'who';
+    const title = document.createElement('b');
+    title.textContent = track.title || track.name || 'Untitled track';
+    const under = document.createElement('span');
+    under.textContent = [track.artist, track.album].filter(Boolean).join(' \u00b7 ') || track.path;
+    who.append(title, under);
+
+    const duration = document.createElement('span');
+    duration.className = 'dur';
+    duration.textContent = track.durationS ? formatTime(track.durationS) : '';
+
+    row.append(number, cover, who, duration);
+    item.append(row);
+    fragment.append(item);
+  }
+  list.append(fragment);
+}
+
+async function refreshLibrary() {
+  releaseArt();
+  libraryTracks = await allTracks();
+  await renderLibrary();
+}
+
+function reportScan(message) {
+  const line = $('#lib-scan');
+  line.hidden = !message;
+  line.textContent = message || '';
+}
+
+async function runScan(handle) {
+  if (scanning) return;
+  reportScan('Scanning your folder...');
+  try {
+    scanning = startScan(handle, {
+      onProgress: ({ scanned, updated }) => reportScan(`Scanned ${scanned} files, indexed ${updated}.`),
+      onFileError: ({ path }) => console.warn(`NakliAmp skipped ${path}`),
+    });
+    const summary = await scanning.done;
+    reportScan(
+      `${summary.tracks} tracks indexed in ${(summary.durationMs / 1000).toFixed(1)}s`
+      + (summary.failed ? `, ${summary.failed} unreadable` : '') + '.',
+    );
+    await refreshLibrary();
+  } catch (error) {
+    reportScan(`Scan stopped: ${error.message}`);
+  } finally {
+    scanning = null;
+  }
+}
+
+async function openLibrary({ prompt = false } = {}) {
+  show('library');
+  if (!supportsFolderGrant()) { reportScan(t('library.nogrant')); return; }
+
+  let handle = await storedFolder();
+  if (handle) {
+    // A grant revoked between sessions is expected, not an error. The index is
+    // still readable, so the library shows while the grant is reclaimed.
+    await refreshLibrary();
+    if (await grantState(handle) !== 'granted') {
+      if (!prompt) { reportScan('Reopen the folder to rescan. Your indexed tracks are still listed.'); return; }
+      if (await reclaimFolder(handle) !== 'granted') { reportScan('The folder grant was not restored.'); return; }
+    }
+  } else {
+    if (!prompt) { reportScan(t('library.none')); return; }
+    handle = await requestFolder();
+    if (!handle) { reportScan(t('library.none')); return; }
+  }
+
+  const previous = await lastScan();
+  if (previous && libraryTracks.length) await refreshLibrary();
+  await runScan(handle);
+}
+
+/** Play the queue entry at `index`, remembering where the last track stopped. */
+async function playQueueAt(index) {
+  const track = queue[index];
+  if (!track) return;
+  const handle = await storedFolder();
+  if (!handle) { reportScan('Reopen your music folder to play from the library.'); return; }
+
+  const file = await fileFromPath(handle, track.path);
+  if (!file) { reportScan(`${track.path} is no longer in the folder. Rescan to update the library.`); return; }
+
+  queueIndex = index;
+  await openMedia(file);
+  if (track.resumePositionS > 1 && track.durationS && track.resumePositionS < track.durationS - 2) {
+    await engine.seek(track.resumePositionS);
+  }
+  await updateTrackState(track.id, { playCount: track.playCount + 1, lastPlayedAt: Date.now() });
+  await renderLibrary();
+}
+
+/** Walk a relative path back to its file handle. */
+async function fileFromPath(rootHandle, path) {
+  try {
+    const segments = path.split('/');
+    const name = segments.pop();
+    let directory = rootHandle;
+    for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+    return await (await directory.getFileHandle(name)).getFile();
+  } catch {
+    return null;
+  }
+}
+
+async function rememberPosition() {
+  const track = queue[queueIndex];
+  if (!track) return;
+  const position = engine.state().clock.positionS;
+  if (Number.isFinite(position)) await updateTrackState(track.id, { resumePositionS: position });
+}
+
+async function advance(step) {
+  if (queueIndex < 0) return;
+  await rememberPosition();
+  const next = queueIndex + step;
+  if (next >= 0 && next < queue.length) await playQueueAt(next);
+}
+
+$('#lib-list').addEventListener('click', event => {
+  const row = event.target.closest('.lib-row');
+  if (row) playQueueAt(Number(row.dataset.index)).catch(error => toast(error.message, 5000));
+});
+$('#lib-search').addEventListener('input', () => { renderLibrary(); });
+$('#lib-rescan').addEventListener('click', () => openLibrary({ prompt: true }));
+$('#lib-close').addEventListener('click', () => show(engine.state().path ? 'player' : 'empty'));
+$('#lib-forget').addEventListener('click', async () => {
+  await forgetFolder();
+  await clearLibrary();
+  queue = [];
+  queueIndex = -1;
+  await refreshLibrary();
+  reportScan(t('library.none'));
+});
+$('#open-folder').addEventListener('click', () => openLibrary({ prompt: true }));
+$('#show-library').addEventListener('click', () => openLibrary());
+addEventListener('pagehide', () => { rememberPosition(); releaseArt(); });
 
 if (new URLSearchParams(location.search).get('harness') === '1') {
   window.__nakliampHarness = Object.freeze({

@@ -67,7 +67,7 @@ async function run() {
   assert(doc.querySelector('#refusal').classList.contains('on'), 'Refusal state did not open.');
   assert(doc.querySelector('#refusal-code').textContent === 'ERR_DEMUX_WMA_REFUSED', 'Refusal code did not render.');
   assert(doc.querySelector('#refusal-message').textContent.includes('WMA'), 'Refusal message omitted WMA.');
-  assert(doc.querySelector('#path-chip').textContent.includes('R3'), 'R3 chip did not render.');
+  assert(doc.querySelector('#path-chip').textContent.includes('R4'), 'R4 refusal chip did not render.');
 
   return {
     version: doc.querySelector('.version').textContent,

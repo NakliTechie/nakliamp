@@ -37,14 +37,27 @@ the proof of Reel's engine-separability invariant.
   crossfade later), metadata parsing (ID3v2 / Vorbis comments / MP4 atoms / FLAC),
   album-art extraction, library index.
 
-## Playback ladder (audio flavour of Reel's R1–R3)
+## Playback ladder (shared with Reel, 2026-08-24)
+
+Reel and NakliAmp vendor one engine and now use one ladder. Rungs are ordered
+by decode cost, cheapest first, so a file lands on the highest rung that can
+actually play it.
 
 ```
-R1  Reel engine → AudioDecoder → Web Audio graph   (gapless, sample-accurate, honesty strip full detail)
-R2  Native <audio> / decodeAudioData fallback       (plays, loses gapless; honesty strip says so)
-    + opt-in IDB-copy library for non-FSA browsers   (real library at 2x storage — disclosed, user chooses)
-R3  Named refusal                                   (e.g., WMA, APE, DRM'd anything — say why, no shrug)
+R1  WebCodecs via the Reel engine        (hardware decode; gapless, sample-accurate; full honesty detail)
+R2  Native element passthrough           (the browser's own decoder; plays, loses gapless; strip says so)
+R3  Software decode (ffmpeg.wasm)        (what R1 and R2 both refuse: WMA, APE, WavPack, Musepack, DSD)
+R4  Named refusal                        (DRM'd anything, or a file with no audio — say why, no shrug)
 ```
+
+Previously the two projects both said "R2" and meant different things: Reel's
+R2 was software decode, NakliAmp's was the native element. Inserting the
+native rung at R2 gives one vocabulary in decode-cost order. Reel's existing
+R2 and R3 renumber to R3 and R4.
+
+**R3 is specced, not built.** NakliAmp ships R1, R2, and R4 today; a file that
+needs software decode is currently a named refusal. R3 arrives with the
+`nakliamp-full.html` artifact.
 
 Honesty strip carries over from Reel: per-track pipeline shown (container →
 codec → decode path → output). Signature sovereignty UI, shared vocabulary
@@ -134,9 +147,9 @@ exist and its audio path must be proven upstream first. Bundle sits
 handoff-ready until then.
 
 ### M0 — Engine proof (audio path)
-Drop-to-play single tracks via Reel engine. Honesty strip. R1/R2/R3 ladder wired.
+Drop-to-play single tracks via Reel engine. Honesty strip. R1/R2/R4 ladder wired.
 **Gate:** golden-file suite decodes and plays — MP3, FLAC, AAC/M4A, Opus, Vorbis/OGG,
-WAV, MKA — verified headlessly through the engine's agent face; R3 refusal named
+WAV, MKA — verified headlessly through the engine's agent face; R4 refusal named
 for WMA fixture. Machine-checkable: golden-file test script green.
 
 ### M1 — Library

@@ -34,6 +34,14 @@ const expectedAllowlist = [
   '!engine/',
   '!engine/nakliamp-engine.mjs',
   '!engine/reel-engine.mjs',
+  '!app/',
+  '!app/library/',
+  '!app/library/metadata.mjs',
+  '!app/library/store.mjs',
+  '!app/library/search.mjs',
+  '!app/library/scan.mjs',
+  '!app/library/scan-core.mjs',
+  '!app/library/scan-worker.mjs',
   '!vendor/',
   '!vendor/mediabunny/',
   '!vendor/mediabunny/LICENSE-MPL-2.0.txt',
@@ -76,4 +84,4 @@ assert(
   'The standalone publication URL is missing.',
 );
 
-console.log('PASS — Delivery policy: six public artifacts; strict CSP; source notice; Chromium-only gate');
+console.log(`PASS — Delivery policy: ${expectedAllowlist.filter(rule => !rule.endsWith('/')).length} public artifacts; strict CSP; source notice; Chromium-only gate`);
