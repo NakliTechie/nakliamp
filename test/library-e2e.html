@@ -310,6 +310,53 @@ async function run() {
   // they acted on a different track than the one clicked.
   const playlistReport = await editPlaylist(app, doc, harness, root, rows, waitFor);
 
+  // 8b. The keyboard map answers to the keys the README documents.
+  //
+  //     The table shows `M`, `N / P` and `L`; only the lowercase keys were
+  //     bound, so holding shift did nothing it promised. `Shift+V` stays a
+  //     binding of its own.
+  {
+    const press = key => doc.dispatchEvent(new app.KeyboardEvent('keydown', { key, bubbles: true }));
+    const before = harness.state().clock.muted;
+    press('M');
+    await waitFor(() => harness.state().clock.muted !== before, 'Shift+M did not mute.');
+    press('m');
+    await waitFor(() => harness.state().clock.muted === before, 'm did not unmute.');
+
+    const track = harness.state().media.name;
+    press('P');
+    await waitFor(() => harness.state().media.name !== track, 'Shift+P did not move to the previous track.');
+    press('N');
+    await waitFor(() => harness.state().media.name === track, 'Shift+N did not move back.');
+
+    // Shift+V is the full-window visualiser, not a second binding for `v`.
+    const mode = harness.visualiser().mode;
+    press('V');
+    assert(harness.visualiser().mode === mode, 'Shift+V changed the visualiser mode instead of going full window.');
+    press('Escape');
+  }
+
+  // 9. A drop anywhere in the window is handled, not navigated to.
+  //
+  // The handlers were bound to the empty-state panel, which is hidden the
+  // moment a library exists — so for everyone past their first run a dropped
+  // file did what an unhandled drop does: the browser navigated the tab to it
+  // and the player went with it. The README says "drag it onto the window".
+  const dropped = new app.File([toneWav(3, 330)], 'Dropped Tune.wav', { type: 'audio/wav' });
+  const transfer = new app.DataTransfer();
+  transfer.items.add(dropped);
+
+  const dragover = new app.DragEvent('dragover', { dataTransfer: transfer, bubbles: true, cancelable: true });
+  doc.body.dispatchEvent(dragover);
+  assert(dragover.defaultPrevented, 'dragover was not prevented, so no drop event would ever fire.');
+
+  const dropEvent = new app.DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true });
+  doc.body.dispatchEvent(dropEvent);
+  assert(dropEvent.defaultPrevented,
+    'A drop on the window was left to the browser, which navigates the tab away from the player.');
+  await waitFor(() => harness.state().media.name === 'Dropped Tune.wav',
+    () => `The dropped file did not open; the player is on ${harness.state().media.name}.`);
+
   harness.pause();
   return {
     ...playlistReport,

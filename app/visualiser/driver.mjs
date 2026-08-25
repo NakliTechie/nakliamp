@@ -143,12 +143,6 @@ export function createVisualiser({
       const index = MODES.findIndex(candidate => candidate.id === mode.id);
       return this.setMode(MODES[(index + step + MODES.length) % MODES.length].id);
     },
-    destroy() {
-      stop();
-      memory = {};
-      freq = new Uint8Array(0);
-      wave = new Uint8Array(0);
-    },
   };
 }
 

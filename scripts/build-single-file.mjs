@@ -27,6 +27,9 @@ const ENTRY_HTML = 'index.html';
 const FULL = process.argv.includes('--full');
 const OUTPUT = FULL ? 'dist/nakliamp-full.html' : 'dist/nakliamp.html';
 
+const HARNESS_START = '// nakliamp:harness-start';
+const HARNESS_END = '// nakliamp:harness-end';
+
 /** Every relative specifier form the source uses. */
 const SPECIFIER = /(?:from\s*|import\s*|new\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"]+)\1/g;
 
@@ -43,6 +46,23 @@ async function collect(path) {
 }
 
 let html = await readFile(resolve(root, ENTRY_HTML), 'utf8');
+
+// The gate seam does not ship. In the source tree it sits behind `?harness=1`,
+// which is enough to keep it inert but not enough to keep it out of a released
+// player — and it meant the release gate drove the artifact through a surface
+// no user has, on a boot path (`restoreSession` suppressed) no user takes. It
+// is cut out here, and the gate drives the artifact through the DOM instead.
+{
+  const start = html.indexOf(HARNESS_START);
+  const end = html.indexOf(HARNESS_END);
+  if (start < 0 || end < 0 || end < start) {
+    throw new Error('The harness markers are missing from index.html; the seam would ship.');
+  }
+  html = html.slice(0, start) + html.slice(end + HARNESS_END.length);
+  if (html.includes('__nakliampHarness')) {
+    throw new Error('The harness surface survived the cut.');
+  }
+}
 if (FULL) {
   // WebAssembly.instantiate is governed by script-src. The lean build has no
   // wasm and keeps the tighter policy; only the artifact that actually carries

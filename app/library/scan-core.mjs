@@ -10,7 +10,7 @@
 
 import { readTags, titleFromName } from './metadata.mjs';
 import {
-  putTracks, deleteTracks, putArt, trackId, allTracks, indexHash, setMeta,
+  putTracks, deleteTracks, putArt, trackId, allTracks, indexHash,
   putPlaylists, allPlaylists, deletePlaylists,
 } from './store.mjs';
 import { isPlaylistPath, parsePlaylist } from './playlist.mjs';
@@ -167,8 +167,9 @@ export async function scanFolder(rootHandle, { post = () => {}, isCancelled = ()
   }
 
   const tracks = await allTracks();
+  // The hash goes out in the summary, which is where callers read it. It used
+  // to be written to a `lastScan` meta record as well, which nothing read.
   const hash = await indexHash(tracks);
-  await setMeta('lastScan', { at: Date.now(), tracks: tracks.length, hash });
 
   const summary = {
     type: 'done',

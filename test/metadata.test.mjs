@@ -493,3 +493,122 @@ test('defect 8: an MP4 track number of 0 is kept, matching the other families', 
   assert.equal(vorbis.trackNo, 0);
   assert.equal(id3v2.trackNo, 0);
 });
+
+// ------------------------------------------------- hostile headers ----
+//
+// Every length below is a claim the file makes about itself. The module's own
+// header promises "a 1k-track scan never reads 1k files whole", and these are
+// the claims that made that false, or turned one scan into hundreds of
+// thousands of reads, or wrote one field's bytes into another field's value.
+
+/** A Blob that counts how many bytes the parser actually asks for. */
+function countingBlob(bytes) {
+  const blob = new Blob([bytes]);
+  const counter = { reads: 0, bytes: 0 };
+  const wrapped = {
+    size: blob.size,
+    type: blob.type,
+    slice(start, end) {
+      counter.reads += 1;
+      counter.bytes += Math.max(0, (end ?? blob.size) - (start ?? 0));
+      return blob.slice(start, end);
+    },
+    arrayBuffer: () => blob.arrayBuffer(),
+  };
+  return { blob: wrapped, counter };
+}
+
+test('an ID3 tag claiming a quarter of a gigabyte does not pull the file in', async () => {
+  // `7F 7F 7F 7F` syncsafe is 256 MB. `bytes()` clamps to the file, so the tag
+  // simply read whatever the file was — all of it, every scan.
+  const music = new Uint8Array(6 * 1024 * 1024);
+  music.set([0xff, 0xfb, 0x90, 0x00]);
+  const file = concat(
+    'ID3', u8(4, 0, 0), u8(0x7f, 0x7f, 0x7f, 0x7f),
+    'TIT2', syncsafe(8), u8(0, 0), textFrame('Bounded'),
+    music,
+  );
+  const { blob, counter } = countingBlob(file);
+  const tags = await readTags(blob);
+
+  assert.equal(tags.title, 'Bounded', 'the frames before the cap must still be read');
+  assert.ok(counter.bytes < 5 * 1024 * 1024,
+    `the parser read ${(counter.bytes / 1024 / 1024).toFixed(1)} MB of a 6 MB file`);
+});
+
+test('Ogg pages declaring no segments cannot walk the whole file', async () => {
+  // A page header with `segmentCount = 0` carries nothing and advances the
+  // cursor by 27 bytes, so an unbounded loop is one read per 27 bytes of file.
+  const page = concat('OggS', u8(0), u8(0), new Uint8Array(20), u8(0));
+  const pages = [];
+  for (let index = 0; index < 4000; index += 1) pages.push(page);
+  const { blob, counter } = countingBlob(concat(...pages));
+
+  await readTags(blob);
+  assert.ok(counter.reads < 400,
+    `the Ogg walk made ${counter.reads} reads over a file of empty pages`);
+});
+
+test('minimum-size MP4 atoms cannot walk the whole file', async () => {
+  // Each atom declares the smallest legal size, so the walk is one read per
+  // eight bytes. 40k atoms is a 320 KB file and used to be 40k reads.
+  const atoms = [];
+  for (let index = 0; index < 40_000; index += 1) atoms.push(concat(be32(8), 'free'));
+  const file = concat(be32(16), 'ftyp', 'M4A ', be32(0), ...atoms);
+  const { blob, counter } = countingBlob(file);
+
+  await readTags(blob);
+  assert.ok(counter.reads < 9000,
+    `the MP4 walk made ${counter.reads} reads over a file of empty atoms`);
+});
+
+test('a WAV INFO field cannot absorb the fields that follow it', async () => {
+  // `INAM` declares 40 bytes where 5 exist, so the decode ran on through
+  // `IART`, its four-byte binary length word included, into the index.
+  const infoBody = concat('INFO',
+    'INAM', le32(40), 'Title',
+    'IART', le32(6), 'Artist',
+  );
+  const list = concat('LIST', le32(infoBody.length), infoBody);
+  const tags = await readTags(new Blob([concat('RIFF', le32(0), 'WAVE', list, 'data', le32(0))]));
+
+  // Nothing after a field of unknowable length can be located, so the walk
+  // stops: no tags rather than a title holding the next field's bytes.
+  assert.equal(tags.title, null, `the title absorbed the next field: ${JSON.stringify(tags.title)}`);
+  assert.equal(tags.artist, null, `a field was located past an unreadable one: ${JSON.stringify(tags.artist)}`);
+  // A well-formed chunk is unaffected.
+  // RIFF fields are word-aligned, so these lengths are even.
+  const good = concat('INFO', 'INAM', le32(6), 'Titles', 'IART', le32(6), 'Artist');
+  const ok = await readTags(new Blob([concat('RIFF', le32(0), 'WAVE',
+    'LIST', le32(good.length), good, 'data', le32(0))]));
+  assert.equal(ok.title, 'Titles');
+  assert.equal(ok.artist, 'Artist');
+});
+
+test('a picture whose declared MIME is not an image type is refused', async () => {
+  // The MIME reaches `new Blob({ type })` and then `createObjectURL`, so its
+  // shape is checked. FLAC also allows `-->`, meaning the block holds a URL
+  // rather than an image — which this reader has no way to show.
+  const withMime = mime => {
+    const encoded = encoder.encode(mime);
+    const description = encoder.encode('front');
+    return concat(
+      be32(3), be32(encoded.length), encoded, be32(description.length), description,
+      be32(64), be32(64), be32(24), be32(0),
+      be32(IMAGE.length), IMAGE,
+    );
+  };
+  const flacWith = block => concat(
+    'fLaC',
+    flacBlock(0, concat(u8(0x10, 0x00, 0x10, 0x00), new Uint8Array(30))),
+    flacBlock(6, block, true),
+  );
+
+  for (const mime of ['-->', 'text/html', 'javascript:alert(1)', '', 'image/png; x=<script>']) {
+    const tags = await readTags(new Blob([flacWith(withMime(mime))]));
+    assert.equal(tags.picture, null, `${JSON.stringify(mime)} was accepted as a picture type`);
+  }
+  // And a real one still is.
+  const good = await readTags(new Blob([flacWith(withMime('image/png'))]));
+  assert.equal(good.picture?.mime, 'image/png');
+});

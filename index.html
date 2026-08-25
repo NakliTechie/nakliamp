@@ -582,17 +582,21 @@ if (storedVolume !== null) {
   }
 }
 
+/**
+ * Drops are handled at the window, not on the empty-state panel.
+ *
+ * The handlers used to live on `#drop`, which sits inside `#empty` and is
+ * `display:none` the moment a library exists — so for anyone past their first
+ * run, dropping a file anywhere did what an unhandled drop does: the browser
+ * navigated the tab to it, taking the player with it. The README says "drag it
+ * onto the window", so the window is where this belongs.
+ */
 const drop = $('#drop');
-for (const eventName of ['dragenter', 'dragover']) {
-  drop.addEventListener(eventName, event => { event.preventDefault(); drop.classList.add('drag'); });
-}
-for (const eventName of ['dragleave', 'drop']) {
-  drop.addEventListener(eventName, event => { event.preventDefault(); drop.classList.remove('drag'); });
-}
-drop.addEventListener('drop', async event => {
+
+async function acceptDrop(dataTransfer) {
   // A dropped folder is the shortest path from "I have music" to "it plays",
   // so it is treated exactly like the picker: remembered, then scanned.
-  const directory = await directoryFromDrop(event.dataTransfer);
+  const directory = await directoryFromDrop(dataTransfer);
   if (directory) {
     await adoptFolder(directory);
     show('library');
@@ -600,9 +604,28 @@ drop.addEventListener('drop', async event => {
     await runScan(directory);
     return;
   }
-  const [file] = event.dataTransfer.files;
+  const [file] = dataTransfer.files;
   if (file) openMedia(file).catch(() => {});
+}
+
+// `preventDefault` on every one of these, always: without it on dragover the
+// drop event never fires, and without it on drop the browser navigates away.
+for (const eventName of ['dragenter', 'dragover']) {
+  addEventListener(eventName, event => {
+    event.preventDefault();
+    if ($('#empty').classList.contains('on')) drop.classList.add('drag');
+  });
+}
+addEventListener('dragleave', event => {
+  event.preventDefault();
+  drop.classList.remove('drag');
 });
+addEventListener('drop', event => {
+  event.preventDefault();
+  drop.classList.remove('drag');
+  acceptDrop(event.dataTransfer).catch(error => toast(error.message, 5000));
+});
+
 drop.addEventListener('keydown', event => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
@@ -630,9 +653,15 @@ const KEYMAP = Object.freeze({
   n: () => advance(1),
   p: () => advance(-1),
 });
+// `Shift+V` is a binding of its own; every other letter answers to either
+// case. The README's table shows `M`, `N / P` and `L`, and only the lowercase
+// keys were mapped, so holding shift did nothing the table promised.
+const SHIFTED = new Set(['V']);
+
 addEventListener('keydown', event => {
   if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
-  const action = KEYMAP[event.key];
+  const action = KEYMAP[event.key]
+    ?? (SHIFTED.has(event.key) ? null : KEYMAP[event.key.toLowerCase()]);
   if (!action) return;
   event.preventDefault();
   action();
@@ -820,12 +849,20 @@ function runScan(handle) {
   return scanChain;
 }
 
+/** Stop a scan in progress. A folder being forgotten must not keep reading it. */
+function cancelScan() {
+  scanning?.cancel();
+}
+
 async function performScan(handle) {
   reportScan('Scanning your folder...');
   try {
     scanning = startScan(handle, {
       onProgress: ({ scanned, updated }) => reportScan(`Scanned ${scanned} files, indexed ${updated}.`),
-      onFileError: ({ path }) => console.warn(`NakliAmp skipped ${path}`),
+      // No per-file logging: a scan of a large folder printed one line per
+      // unreadable file, each carrying the user's own path, to a console
+      // nobody reads. The count is in the summary line below instead.
+      onFileError: () => {},
     });
     const summary = await scanning.done;
     reportScan(
@@ -858,7 +895,15 @@ async function openLibrary({ prompt = false } = {}) {
     }
   } else {
     if (!prompt) { reportScan(t('library.none')); return; }
-    handle = await requestFolder();
+    try {
+      handle = await requestFolder();
+    } catch (error) {
+      // `GrantError` is the named refusal this module raises for a browser
+      // that cannot hold a folder grant at all. It was thrown and never caught
+      // by name, so it surfaced as an unhandled rejection.
+      if (error?.name === 'GrantError') { reportScan(error.message); return; }
+      throw error;
+    }
     if (!handle) { reportScan(t('library.none')); return; }
   }
 
@@ -1265,6 +1310,8 @@ $('#lib-search').addEventListener('input', () => { renderLibrary(); });
 $('#lib-rescan').addEventListener('click', () => openLibrary({ prompt: true }));
 
 $('#lib-forget').addEventListener('click', async () => {
+  // Stop reading a folder the moment it stops being ours to read.
+  cancelScan();
   await forgetFolder();
   await clearLibrary();
   queue = [];
@@ -1275,11 +1322,18 @@ $('#lib-forget').addEventListener('click', async () => {
 });
 $('#open-folder').addEventListener('click', () => openLibrary({ prompt: true }));
 
-addEventListener('pagehide', () => { rememberPosition(); releaseArt(); });
+addEventListener('pagehide', () => { rememberPosition(); releaseArt(); cancelScan(); });
 // `pagehide` does not fire when a tab is merely switched away from or the phone
 // is locked, which is most of how listening actually ends.
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') rememberPosition(); });
 
+// nakliamp:harness-start
+//
+// The gate seam. Behind `?harness=1` in the source tree, and **removed
+// entirely** from both single-file artifacts at build time — a released player
+// should not carry a way to drive it. The release gate therefore drives the
+// artifact through the DOM alone, which is the point: what it tests is what
+// ships, byte for byte.
 if (new URLSearchParams(location.search).get('harness') === '1') {
   window.__nakliampHarness = Object.freeze({
     open: input => openMedia(input, { autoplay: false }),
@@ -1315,6 +1369,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     seek: positionS => engine.seek(positionS),
   });
 }
+// nakliamp:harness-end
 
 engine.setVolume(Number($('#volume').value));
 renderClock();
@@ -1352,7 +1407,7 @@ async function restoreSession() {
   $('#lib-reopen').hidden = false;
 }
 
-if (new URLSearchParams(location.search).get('harness') !== '1') restoreSession();
+restoreSession();
 </script>
 </body>
 </html>

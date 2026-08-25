@@ -220,6 +220,30 @@ async function run() {
     report.undecodableCode = failure.code;
   }
 
+  // 8b. A browser without WebCodecs must still reach the software rung.
+  //
+  //     Both fallback blocks were gated on having started at R1, so where
+  //     `AudioDecoder` does not exist the engine went straight to the native
+  //     rung and stopped there — AIFF, CAF and AU refused outright, on exactly
+  //     the browsers most likely to need software decode.
+  {
+    const audioDecoder = globalThis.AudioDecoder;
+    delete globalThis.AudioDecoder;
+    try {
+      const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: SOFTWARE_DECODERS });
+      assert(engine.caps().preferredPath === 'r2',
+        `Removing AudioDecoder did not change the preferred rung (${engine.caps().preferredPath}).`);
+      const loaded = await engine.load(await fixture('audio-pcm.aiff'));
+      assert(loaded.path === 'r3',
+        `Without WebCodecs an AIFF loaded on ${loaded.path}; the software rung was unreachable.`);
+      assert(engine.state().media.duration > 0.1, 'The software decode produced nothing.');
+      engine.destroy();
+      report.noWebCodecsPath = loaded.path;
+    } finally {
+      if (audioDecoder) globalThis.AudioDecoder = audioDecoder;
+    }
+  }
+
   // 9. R3 must give its AudioContext back.
   //
   // An AudioContext holds a live audio thread and, through its buffer, the

@@ -55,6 +55,13 @@ assert(pinned, 'VENDOR.md does not name a pinned Reel commit.');
 assert(html.includes(pinned), 'The artifact omits the pinned Reel commit.');
 
 // The engine and its demuxer must actually be inside the file, not referenced.
+// A released player must carry no way to drive it from outside.
+assert(!/__nakliampHarness/.test(html), 'The artifact ships the gate seam.');
+// Scoped to NakliAmp's own names: the vendored Reel engine has its own
+// comments about the headless harness it is driven by, and is not patched.
+assert(!/nakliamp:harness/.test(html), 'The artifact kept the harness markers.');
+assert(!/\?harness=1|get\('harness'\)/.test(html), 'The artifact still reads the harness query flag.');
+
 assert(/createNakliAmpEngine/.test(html), 'The artifact does not contain the NakliAmp core.');
 assert(/createReelEngine/.test(html), 'The artifact does not contain the Reel engine.');
 

@@ -717,6 +717,35 @@ export function createNakliAmpEngine({
           throw fallbackError;
         }
       }
+      // R2 to R3, when the browser was the *first* rung rather than the
+      // second. Both blocks above are gated on having started at R1, so on a
+      // browser without WebCodecs `AudioDecoder` the software rung was
+      // unreachable and AIFF, CAF and AU were refused outright — on exactly
+      // the browsers most likely to need it. "Tries every rung before it gives
+      // up" has to mean every rung it actually has.
+      if (nextMode === 'r2'
+        && forcePath === 'auto'
+        && loadId === latestLoadId
+        && softwareDecoders.length
+        && !FALLBACK_BLOCKED.has(error?.code)) {
+        try {
+          const loaded = await loadR3(input, loadId);
+          fellBackFrom = error?.code ?? 'ERR_NAKLIAMP_R2_FAILED';
+          events.emit('playback:fallback', { from: 'r2', to: 'r3', code: error?.code });
+          return { ...loaded, fellBackFrom };
+        } catch (softwareError) {
+          if (loadId !== latestLoadId) throw softwareError;
+          // The browser's reason for refusing a file it recognises is more
+          // useful than "no decoder claimed it".
+          if (softwareError?.code === 'ERR_NAKLIAMP_SOFTWARE_UNSUPPORTED') {
+            recordError(error);
+            throw error;
+          }
+          recordError(softwareError);
+          throw softwareError;
+        }
+      }
+
       if (loadId !== latestLoadId) {
         throw new NakliAmpError(
           'SupersededLoadError',

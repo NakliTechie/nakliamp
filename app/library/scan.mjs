@@ -159,7 +159,3 @@ export function startScan(rootHandle, { onProgress = () => {}, onFileError = () 
   };
 }
 
-/** The summary written by the last completed scan, or null. */
-export async function lastScan() {
-  return getMeta('lastScan');
-}

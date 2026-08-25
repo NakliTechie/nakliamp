@@ -10,6 +10,20 @@ const UTF16BE = new TextDecoder('utf-16be');
 
 const COPYRIGHT = String.fromCharCode(0xa9); // the MP4 `©` atom-name prefix
 
+/**
+ * Budgets on what a file gets to ask this module to do.
+ *
+ * Every one of these is read out of a header, so every one is written by
+ * whoever made the file. The header above promises a scan never reads a
+ * thousand files whole; an ID3 size field of `7F 7F 7F 7F` claims 256 MB, and
+ * with no cap that promise was simply false. The walk budgets bound work
+ * rather than memory: an Ogg page declaring no segments, or a chain of
+ * minimum-size MP4 atoms, is one asynchronous read per eight bytes of file.
+ */
+const MAX_ID3_BYTES = 4 * 1024 * 1024;   // comfortably past any embedded cover
+const MAX_OGG_PAGES = 64;                // the comment packet is in the first few
+const MAX_MP4_ATOMS = 4096;              // per level of the tree
+
 const EMPTY = Object.freeze({
   title: null, artist: null, album: null, albumArtist: null,
   trackNo: null, trackTotal: null, discNo: null, discTotal: null,
@@ -148,7 +162,10 @@ async function readId3(blob, tags) {
   const major = header[3];
   const size = syncsafe(header, 6);
   const extended = (header[5] & 0x40) !== 0;
-  const region = await bytes(blob, 10, size);
+  // Truncating loses frames past the cap — an oversized embedded picture,
+  // usually — and keeps everything before it. Reading the whole file to find
+  // out is the worse trade on a thousand-track scan.
+  const region = await bytes(blob, 10, Math.min(size, MAX_ID3_BYTES));
   const idLength = major === 2 ? 3 : 4;
   const headerLength = major === 2 ? 6 : 10;
   let cursor = 0;
@@ -230,7 +247,13 @@ function readFlacPicture(block) {
   let cursor = 4; // picture type
   const mimeLength = u32be(block, cursor);
   cursor += 4;
-  const mime = LATIN1.decode(block.subarray(cursor, cursor + mimeLength)) || 'image/jpeg';
+  // The MIME type is file-supplied and ends up in `new Blob({ type })` and
+  // then `createObjectURL`, so its shape is checked rather than trusted. FLAC
+  // also allows `-->`, meaning the "picture" is a URL; this reader deals in
+  // bytes, so that is not a picture it can show.
+  const declaredMime = LATIN1.decode(block.subarray(cursor, cursor + Math.min(mimeLength, 255)));
+  if (mimeLength > 255 || !/^image\/[a-z0-9.+-]{1,32}$/i.test(declaredMime)) return null;
+  const mime = declaredMime;
   cursor += mimeLength;
   const descriptionLength = u32be(block, cursor);
   cursor += 4 + descriptionLength;
@@ -306,7 +329,10 @@ async function readOgg(blob, tags) {
   let emitted = 0;
 
   // Two header packets carry everything: identification, then comments.
-  while (emitted < 2 && offset + PAGE_HEADER <= blob.size) {
+  // Bounded by pages as well as by packets: a page declaring no segments
+  // advances the cursor by its header alone, so an unbounded loop is one read
+  // per twenty-seven bytes of the whole file.
+  for (let page = 0; page < MAX_OGG_PAGES && emitted < 2 && offset + PAGE_HEADER <= blob.size; page += 1) {
     const header = await bytes(blob, offset, PAGE_HEADER);
     if (header.length < PAGE_HEADER || ascii(header, 0, 4) !== 'OggS') return;
     const segmentCount = header[26];
@@ -370,7 +396,9 @@ const MP4_LYRICS = `${COPYRIGHT}lyr`;
 async function mp4Walk(blob, start, end, visit, depth = 0) {
   if (depth > 8) return;
   let cursor = start;
-  while (cursor + 8 <= end) {
+  // Atom-count bound as well as a depth bound: a run of minimum-size atoms is
+  // one asynchronous read per eight bytes of file, which is real disk I/O.
+  for (let atom = 0; atom < MAX_MP4_ATOMS && cursor + 8 <= end; atom += 1) {
     const header = await bytes(blob, cursor, 8);
     if (header.length < 8) return;
     let size = u32be(header, 0);
@@ -453,14 +481,20 @@ async function readWav(blob, tags) {
       let inner = 4;
       while (inner + 8 <= body.length) {
         const key = ascii(body, inner, 4);
-        const length = u32le(body, inner + 4);
-        const value = trimNul(LATIN1.decode(body.subarray(inner + 8, inner + 8 + length)));
+        // A field declaring more length than its chunk holds used to read
+        // straight through the fields after it — their four-byte binary length
+        // words included — into the library index, which is where the user
+        // then read it as a title. Nothing after such a field can be located,
+        // so the walk stops rather than guessing.
+        const declared = u32le(body, inner + 4);
+        if (declared <= 0 || declared > body.length - (inner + 8)) break;
+        const value = trimNul(LATIN1.decode(body.subarray(inner + 8, inner + 8 + declared)));
         if (key === 'INAM') tags.title ??= value;
         else if (key === 'IART') tags.artist ??= value;
         else if (key === 'IPRD') tags.album ??= value;
         else if (key === 'IGNR') tags.genre ??= value;
         else if (key === 'ICRD') tags.year ??= year(value);
-        inner += 8 + length + (length % 2);
+        inner += 8 + declared + (declared % 2);
       }
     }
     if (size <= 0) break;
