@@ -12,14 +12,47 @@ async function request(path) {
   return { response, body: await response.text() };
 }
 
+// The version is read from the source rather than hardcoded here. It was
+// hardcoded, and went stale at the first bump: this gate would have failed a
+// correct deployment for naming the wrong version.
+const { readFile } = await import('node:fs/promises');
+const localIndex = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+const version = /<meta name="nakliamp-version" content="([^"]+)">/.exec(localIndex)?.[1];
+if (!version) throw new Error('index.html declares no version.');
+
+// Every module the page imports must be served, or the app breaks on load.
+const SPECIFIER = /(?:from\s*|import\s*|new\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"]+)\1/g;
+const inline = /<script type="module">([\s\S]*?)<\/script>/.exec(localIndex)?.[1] ?? '';
+const modulePaths = new Set();
+async function collect(path) {
+  if (modulePaths.has(path)) return;
+  modulePaths.add(path);
+  const source = await readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+  for (const [, , specifier] of source.matchAll(SPECIFIER)) {
+    const parts = path.split('/').slice(0, -1);
+    for (const segment of specifier.split('/')) {
+      if (segment === '.' || segment === '') continue;
+      if (segment === '..') parts.pop();
+      else parts.push(segment);
+    }
+    await collect(parts.join('/'));
+  }
+}
+for (const [, , specifier] of inline.matchAll(SPECIFIER)) await collect(specifier.replace(/^\.\//, ''));
+
 const expected = [
-  ['/', 'text/html', 'v0.1.0-m0 · preview'],
+  ['/', 'text/html', `v${version}`],
   ['/VENDOR.md', 'text/markdown', 'Corresponding Mediabunny source is available'],
   ['/engine/nakliamp-engine.mjs', 'javascript', 'export function createNakliAmpEngine'],
   ['/engine/reel-engine.mjs', 'javascript', 'export function createReelEngine'],
   ['/vendor/mediabunny/LICENSE-MPL-2.0.txt', 'text/plain', 'Mozilla Public License Version 2.0'],
   ['/vendor/mediabunny/mediabunny-1.51.0.min.mjs', 'javascript', 'Vanilagy and contributors'],
 ];
+
+for (const path of [...modulePaths].sort()) {
+  if (expected.some(([known]) => known === `/${path}`)) continue;
+  expected.push([`/${path}`, path.endsWith('.mjs') ? 'javascript' : 'text/plain', '']);
+}
 
 let rootHeaders = null;
 for (const [path, contentType, marker] of expected) {
@@ -29,7 +62,8 @@ for (const [path, contentType, marker] of expected) {
     response.headers.get('content-type')?.toLowerCase().includes(contentType),
     `${path}: unexpected Content-Type ${response.headers.get('content-type')}`,
   );
-  assert(body.includes(marker), `${path}: response omitted ${marker}`);
+  if (marker) assert(body.includes(marker), `${path}: response omitted ${marker}`);
+  assert(body.length > 0, `${path}: served an empty body`);
   if (path === '/') rootHeaders = response.headers;
 }
 
@@ -60,4 +94,7 @@ assert(
 assert(rootHeaders.get('referrer-policy') === 'no-referrer', 'The live referrer policy is missing.');
 assert(rootHeaders.get('x-content-type-options') === 'nosniff', 'The live MIME-sniffing defense is missing.');
 
-console.log(`PASS — Deployment boundary at ${baseUrl.origin}: 6 public assets; 1 canonical redirect; 9 private routes; strict headers`);
+console.log(
+  `PASS — Deployment boundary at ${baseUrl.origin}: ${expected.length} public assets; `
+  + '1 canonical redirect; 9 private routes; strict headers',
+);
