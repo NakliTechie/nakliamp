@@ -21,7 +21,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY_HTML = 'index.html';
-const OUTPUT = 'dist/nakliamp.html';
+// `--full` emits the heavier artifact that carries the wasm software decoder.
+// The lean build must stay lean, so the difference is made here rather than by
+// a runtime flag the lean build would still have to ship.
+const FULL = process.argv.includes('--full');
+const OUTPUT = FULL ? 'dist/nakliamp-full.html' : 'dist/nakliamp.html';
 
 /** Every relative specifier form the source uses. */
 const SPECIFIER = /(?:from\s*|import\s*|new\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"]+)\1/g;
@@ -29,7 +33,8 @@ const SPECIFIER = /(?:from\s*|import\s*|new\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"]+
 const modules = new Map();
 
 async function collect(path) {
-  if (modules.has(path)) return;
+  // A `new URL('../dir/', ...)` specifier names a directory, not a module.
+  if (path.endsWith('/') || modules.has(path)) return;
   const source = await readFile(resolve(root, path), 'utf8');
   modules.set(path, source);
   for (const [, , specifier] of source.matchAll(SPECIFIER)) {
@@ -37,7 +42,18 @@ async function collect(path) {
   }
 }
 
-const html = await readFile(resolve(root, ENTRY_HTML), 'utf8');
+let html = await readFile(resolve(root, ENTRY_HTML), 'utf8');
+if (FULL) {
+  html = html.replace(
+    "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';",
+    "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';\n"
+    + "import { libavDecoder } from './app/decode/libav.mjs';",
+  );
+  html = html.replace(
+    "  { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm },",
+    "  { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm },\n  libavDecoder,",
+  );
+}
 
 // The page's own module script names the entry points.
 const inlineScript = html.match(/<script type="module">([\s\S]*?)<\/script>/);
@@ -46,6 +62,14 @@ for (const [, , specifier] of inlineScript[1].matchAll(SPECIFIER)) {
   await collect(posix.normalize(specifier.replace(/^\.\//, '')));
 }
 if (!modules.size) throw new Error('No modules were reachable from index.html.');
+
+// The wasm decoder reaches its frontend and glue through dynamic imports built
+// from URLs, which the static walk cannot see. Collect them explicitly, or the
+// full artifact would fetch them at runtime and stop being self-contained.
+if (FULL) {
+  await collect('vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs');
+  await collect('vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs');
+}
 
 const licence = await readFile(resolve(root, 'vendor/mediabunny/LICENSE-MPL-2.0.txt'), 'utf8');
 const vendorNotice = await readFile(resolve(root, 'VENDOR.md'), 'utf8');
@@ -95,6 +119,23 @@ window.__nakliampModule = __nakliampModule;
 
 const sources = JSON.stringify(Object.fromEntries(modules));
 
+// The wasm is binary, so it cannot be a module. It is embedded as base64 and
+// handed to the emscripten factory as `wasmBinary`, which means the full
+// artifact fetches nothing at all — the same promise the lean one makes.
+let wasmPreload = '';
+if (FULL) {
+  const wasmPath = 'vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm';
+  const wasmBytes = await readFile(resolve(root, wasmPath));
+  wasmPreload = `
+const __nakliampWasmBase64 = ${JSON.stringify(wasmBytes.toString('base64'))};
+window.__nakliampWasmBinary = Uint8Array.from(atob(__nakliampWasmBase64), c => c.charCodeAt(0));
+window.__nakliampLibavUrls = {
+  loader: __nakliampModule('vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs'),
+  factory: __nakliampModule('vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs'),
+};
+`;
+}
+
 // The app script imports by path; in the single file those become blob URLs
 // resolved through the loader, so its import statements become dynamic.
 let appScript = inlineScript[1];
@@ -132,7 +173,7 @@ const insert = value => () => value;
 
 const scriptBlock = `<script type="module">\n${
   loader.replace('__NAKLIAMP_SOURCES__', insert(sources))
-}\n${appScript}\n</script>`;
+}\n${wasmPreload}\n${appScript}\n</script>`;
 
 const licenceBlock = `<script type="application/vnd.nakliamp.licence" id="mediabunny-licence">\n${
   licence.replace(/<\/script>/gi, '<\\/script>')

@@ -1,22 +1,7 @@
 // R3 software decode, wasm tier: the compressed formats no browser decodes.
 //
-// NOT YET WIRED IN. Nothing imports this module; the lean build ships only the
-// in-house PCM tier. It is committed because the binary it targets is vendored
-// and pinned, and this is the shape the adapter takes.
-//
-// What is blocking it: the custom libav.js variant instantiates and exposes 272
-// symbols (`av_dict_*`, `ff_malloc_*`, the AV_* constants) but **not** the
-// high-level helpers this file calls — `ff_init_demuxer_file`,
-// `ff_read_frame_multi`, `ff_decode_multi` — nor `writeFile`/`unlink`.
-// Instantiating through `LibAV.LibAV({base, variant})` without an explicit
-// factory yields an instance with no methods at all; passing `factory` yields
-// the raw emscripten module instead of the wrapped one. So the frontend is not
-// binding its helpers to this variant. Next step is to compare our generated
-// config against a stock variant that does work (`default`), since the
-// difference is most likely a missing base fragment rather than the API.
-//
 // WMA (v1, v2, Pro, Lossless) and WavPack, through a custom libav.js build
-// configured with exactly those decoders and their demuxers — 176 KB of wasm,
+// configured with exactly those decoders and their demuxers — 1.1 MB of wasm,
 // not a general-purpose ffmpeg. See VENDOR.md for the build and its LGPL terms.
 //
 // This tier is separate from the in-house PCM tier because it costs a download.
@@ -25,8 +10,13 @@
 // Loading is lazy and happens once: the module is only instantiated when a file
 // actually needs it, so a library of MP3s never pays for it.
 
-const WASM_URL = new URL('../../vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm', import.meta.url);
-const GLUE_URL = new URL('../../vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs', import.meta.url);
+const BASE_URL = new URL('../../vendor/libav/', import.meta.url);
+const LOADER_URL = new URL('libav-6.10.9.0-nakliamp.loader.mjs', BASE_URL);
+const FACTORY_URL = new URL('libav-6.10.9.0-nakliamp.wasm.mjs', BASE_URL);
+
+// libav reads packets up to a byte budget. There is no "read everything"
+// sentinel: `-1` silently yields a single packet and therefore zero frames.
+const READ_LIMIT = 256 * 1024 * 1024;
 
 /** Containers this tier claims. Sniffed by magic bytes, never by file name. */
 const SIGNATURES = [
@@ -56,17 +46,23 @@ let modulePromise = null;
  */
 async function libav() {
   modulePromise ??= (async () => {
-    const factory = await import(GLUE_URL.href);
-    const create = factory.default ?? factory.LibAVFactory ?? factory;
-    if (typeof create !== 'function') {
-      throw Object.assign(new Error('The libav glue did not export a factory.'), {
-        code: 'ERR_NAKLIAMP_LIBAV_GLUE',
-      });
-    }
-    return create({
-      // Keep the wasm beside its glue rather than wherever the page happens to
-      // be. In the single-file build both are blob URLs and this still holds.
-      locateFile: () => WASM_URL.href,
+    // The high-level frontend is what carries ff_init_demuxer_file and the rest.
+    // The raw emscripten factory alone exposes only the C symbols, so it is
+    // passed in rather than used directly.
+    // In the single-file build these are blob URLs the loader publishes; the
+    // module graph cannot see a dynamic import built from a URL.
+    const inlined = globalThis.__nakliampLibavUrls;
+    const LibAV = (await import(inlined?.loader ?? LOADER_URL.href)).default;
+    const factory = (await import(inlined?.factory ?? FACTORY_URL.href)).default;
+    // The single-file build embeds the wasm bytes rather than a URL, so the
+    // artifact fetches nothing. Everywhere else the file sits beside the glue.
+    const wasmBinary = globalThis.__nakliampWasmBinary;
+    return LibAV.LibAV({
+      noworker: true,
+      nothreads: true,
+      variant: 'nakliamp',
+      base: BASE_URL.href,
+      factory: wasmBinary ? options => factory({ ...options, wasmBinary }) : factory,
     });
   })();
   return modulePromise;
@@ -108,8 +104,22 @@ export async function decodeLibav(data) {
     if (!audio) throw decodeError('ERR_NAKLIAMP_LIBAV_NO_AUDIO', 'This file has no audio stream.');
 
     const [, context, packet, frame] = await instance.ff_init_decoder(audio.codec_id, audio.codecpar);
-    const [, packets] = await instance.ff_read_frame_multi(format, packet, { limit: -1 });
-    const frames = await instance.ff_decode_multi(context, packet, frame, packets[audio.index] ?? [], true);
+
+    // Read to end of file. ff_read_frame_multi returns a batch and a status;
+    // one call yields a single batch, which decodes to a few milliseconds.
+    const frames = [];
+    for (let guard = 0; guard < 100_000; guard += 1) {
+      const [status, batch] = await instance.ff_read_frame_multi(format, packet, { limit: READ_LIMIT });
+      const stream = batch[audio.index] ?? [];
+      const done = status === instance.AVERROR_EOF;
+      if (stream.length) {
+        frames.push(...await instance.ff_decode_multi(context, packet, frame, stream, done));
+      } else if (done) {
+        frames.push(...await instance.ff_decode_multi(context, packet, frame, [], true));
+      }
+      if (done) break;
+      if (!stream.length) break;
+    }
     if (!frames.length) throw decodeError('ERR_NAKLIAMP_LIBAV_EMPTY', 'The software decoder produced no audio.');
 
     const decoded = collect(frames);
@@ -124,12 +134,23 @@ export async function decodeLibav(data) {
   }
 }
 
+function describe(frame) {
+  if (!frame) return 'none';
+  const outer = Array.isArray(frame.data) ? 'array' : frame.data?.constructor?.name;
+  const inner = Array.isArray(frame.data) ? (frame.data[0]?.constructor?.name ?? typeof frame.data[0]) : '-';
+  const len = Array.isArray(frame.data) ? frame.data[0]?.length : frame.data?.length;
+  return `${outer}/${inner} len=${len} rate=${frame.sample_rate} ch=${frame.channels}`;
+}
+
 /** libav frames arrive planar or packed depending on the codec; normalise both. */
 function collect(frames) {
   const first = frames[0];
   const channelCount = first.channels ?? first.channel_layout?.nb_channels ?? 1;
   const sampleRate = first.sample_rate;
-  const planar = Array.isArray(first.data) && Array.isArray(first.data[0]);
+  // Planar frames are an array of per-channel buffers. Those buffers are typed
+  // arrays, so `Array.isArray` on them is false — testing it that way counts
+  // every frame as one sample.
+  const planar = Array.isArray(first.data) && ArrayBuffer.isView(first.data[0]);
 
   let total = 0;
   for (const frame of frames) {

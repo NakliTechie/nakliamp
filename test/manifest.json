@@ -71,6 +71,18 @@
       "bytes": 12032,
       "sha256": "44fb633a0f7737e53b7a9b6961ab44addb115bc1ebb3ae9d0533da71f46c2e06",
       "role": "audio-r3"
+    },
+    {
+      "file": "audio-wmav2.wma",
+      "bytes": 86944,
+      "sha256": "715487f551aed20349c0faf805d634a0830eb8a1ad21fbd1f345ce87e9adf08e",
+      "role": "audio-wasm"
+    },
+    {
+      "file": "audio-wavpack.wv",
+      "bytes": 116431,
+      "sha256": "289d0e25b7cd522142a6b20c1954b662cbf5b017d7db8fa29920bf0620dc17f5",
+      "role": "audio-wasm"
     }
   ]
 }

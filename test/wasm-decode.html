@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>NakliAmp wasm decode gate</title></head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+// R3 wasm tier: the formats no browser decodes.
+//
+// Holds two claims at once. The wasm tier decodes WMA and WavPack, and the
+// lean build still refuses both by name — a build's decoders are a property of
+// that build, and shipping the heavy one must not quietly change the light one.
+
+import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+import { decodePcm, sniffPcm } from '../app/decode/pcm.mjs';
+import { libavDecoder } from '../app/decode/libav.mjs';
+
+const PCM = { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm };
+const result = document.querySelector('#result');
+const assert = (c, m) => { if (!c) throw new Error(m); };
+
+async function fixture(name) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: ${response.status}`);
+  return new File([await response.arrayBuffer()], name);
+}
+
+async function run() {
+  const report = {};
+
+  for (const [name, container] of [['audio-wmav2.wma', 'wma'], ['audio-wavpack.wv', 'wavpack']]) {
+    // No browser decodes these; if one starts, this gate is testing nothing.
+    const element = document.createElement('audio');
+    const mime = { wma: 'audio/x-ms-wma', wavpack: 'audio/wavpack' }[container];
+    assert(!element.canPlayType(mime), `${name}: this browser now plays ${mime}.`);
+
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM, libavDecoder] });
+    const loaded = await engine.load(await fixture(name));
+    const state = engine.state();
+
+    assert(loaded.path === 'r3', `${name} loaded on ${loaded.path}, expected r3.`);
+    assert(state.honesty.decode.includes('libav'), `${name}: strip hid the wasm tier: ${state.honesty.decode}`);
+    assert(state.media.duration > 4,
+      `${name}: decoded ${state.media.duration}s, expected about 5. frames=${loaded.tracks?.[0]?.diag ?? '?'}`);
+    assert(state.track.sampleRate === 44100, `${name}: rate ${state.track.sampleRate}.`);
+
+    await engine.play();
+    await new Promise(r => setTimeout(r, 150));
+    assert(engine.state().clock.playing, `${name}: not playing.`);
+    assert(engine.state().clock.positionS > 0, `${name}: clock did not advance.`);
+    engine.pause();
+    report[container] = { path: loaded.path, seconds: +state.media.duration.toFixed(2) };
+  }
+
+  // The lean build refuses both, by name, and does not retry them.
+  for (const name of ['audio-wmav2.wma', 'audio-wavpack.wv']) {
+    let refusal = null;
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM] });
+    try { await engine.load(await fixture(name)); } catch (error) { refusal = error; }
+    assert(refusal, `${name}: the lean build played a format it has no decoder for.`);
+    assert(refusal.code, `${name}: refusal carried no code.`);
+    report[`lean:${name}`] = refusal.code;
+  }
+
+  return report;
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp wasm decode gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp wasm decode gate';
+});
+</script>
+</body>
+</html>

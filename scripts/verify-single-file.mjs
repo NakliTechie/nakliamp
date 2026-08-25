@@ -13,7 +13,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const path = resolve(root, 'dist/nakliamp.html');
+const target = process.argv[2] === '--full' ? 'dist/nakliamp-full.html' : 'dist/nakliamp.html';
+const path = resolve(root, target);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -88,9 +89,9 @@ try {
 
 const { size } = await stat(path);
 assert(size > 512 * 1024, `The artifact is ${size} bytes, too small to contain the engine.`);
-assert(size < 8 * 1024 * 1024, `The artifact is ${(size / 1024 / 1024).toFixed(1)} MB, past the release budget.`);
+assert(size < (target.includes('full') ? 12 : 4) * 1024 * 1024, `The artifact is ${(size / 1024 / 1024).toFixed(1)} MB, past the release budget.`);
 
 console.log(
-  `PASS — Single-file release: ${(size / 1024 / 1024).toFixed(2)} MB; `
+  `PASS — Single-file release (${target}): ${(size / 1024 / 1024).toFixed(2)} MB; `
   + `${Object.keys(sources).length} modules parse; zero external references; licence and pin carried`,
 );

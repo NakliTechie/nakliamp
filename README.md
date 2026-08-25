@@ -85,10 +85,13 @@ and Chrome decodes none of them by either other path. They are uncompressed, so
 closing that gap needed a header parser rather than a codec, and it costs no
 download.
 
-**Refused, by name:** WMA, Monkey's Audio, WavPack, Musepack and DSD. These are
-compressed formats no browser decodes; they need a real decoder, which is what
-a second, heavier build will carry. Until then the refusal says so rather than
-failing vaguely.
+**On the software rung, heavy build only:** WMA (v1, v2, Pro, Lossless) and
+WavPack, through a custom 1.1 MB libav build carrying exactly those decoders.
+The lean build refuses them by name; a build's decoders are a property of that
+build.
+
+**Refused, by name, everywhere:** Monkey's Audio, Musepack and DSD. No
+libav.js fragment exists for them.
 
 Two more consequences worth knowing: **a file carrying video plays its audio**
 rather than being refused, and **a refusal is a dismissible banner**, not a
@@ -127,12 +130,17 @@ to Reel, not worked around here.
 
 ## Two builds
 
-**Single file.** `dist/nakliamp.html` is one self-contained file — the app, the
-engine and the demuxer, about 0.9 MB, with no external references at all. Save
-it anywhere and open it, including straight off your filesystem over `file://`.
+**Single file, lean.** `dist/nakliamp.html` — the app, the engine and the
+demuxer, about 0.9 MB, no external references. Save it anywhere and open it,
+including straight off your filesystem over `file://`.
+
+**Single file, full.** `dist/nakliamp-full.html` — the same plus the wasm
+software decoder, about 2.7 MB. Adds WMA and WavPack. The wasm is embedded as
+bytes, so it still fetches nothing.
 
 ```sh
 node scripts/build-single-file.mjs
+node scripts/build-single-file.mjs --full
 ```
 
 **Hosted.** The same app deploys as Cloudflare Worker Static Assets at
@@ -153,10 +161,10 @@ only ingress, and a gate enforces it.
 ./scripts/verify-browser.sh
 ```
 
-That runs the static gates, the Node unit suites, and seven Chromium harnesses
+That runs the static gates, the Node unit suites, and eight Chromium harnesses
 twice each, cold and warm: golden audio, UI smoke, the library scan gate, the
-library end-to-end gate, universal playback, the analyser tap, and the
-single-file release. Any console error or network request fails the run.
+library end-to-end gate, universal playback, the analyser tap, wasm decode,
+and the single-file release. Any console error or network request fails the run.
 
 The end-to-end gate attaches a real folder and plays from it. A folder grant
 needs a user gesture no harness can give, so it uses an OPFS directory:
@@ -177,8 +185,7 @@ nothing.
 
 ## Not built yet
 
-Stated plainly rather than implied by omission: software decode for compressed
-formats (WMA, APE, WavPack, Musepack, DSD — a second, heavier build), gapless
+Stated plainly rather than implied by omission: Monkey's Audio, Musepack and DSD; gapless
 playback, the equaliser, Media Session integration, and the compact/full
 duality. `plan/cliamp-parity.md` holds the full feature target and
 `plan/workplan.md` the order.

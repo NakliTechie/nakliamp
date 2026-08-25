@@ -69,6 +69,17 @@ const FALLBACK_BLOCKED = Object.freeze(new Set([
   'ERR_NAKLIAMP_LOAD_SUPERSEDED',
   'ERR_ENGINE_LOAD_SUPERSEDED',
   'ERR_NAKLIAMP_NO_AUDIO',
+]));
+
+/**
+ * Codecs the engine names and refuses, and no browser decodes either.
+ *
+ * Trying the native rung for these wastes a load and replaces a precise refusal
+ * with a vague one. Trying the *software* rung is different: a build carrying a
+ * decoder for them should use it, and one without it still ends at the original
+ * named refusal.
+ */
+const SOFTWARE_ONLY_REFUSALS = Object.freeze(new Set([
   'ERR_DEMUX_WMA_REFUSED',
   'ERR_DEMUX_APE_REFUSED',
 ]));
@@ -629,10 +640,32 @@ export function createNakliAmpEngine({
       // R1 to R2 fallback. Without it, anything the engine cannot demux is a
       // dead end even when the browser itself could play the file — the single
       // largest gap between "an engine proof" and "throw anything at it".
+      // A named codec refusal skips the native rung and goes straight to
+      // software, which is the only rung that could ever play it.
       if (nextMode === 'r1'
         && forcePath === 'auto'
         && loadId === latestLoadId
-        && !FALLBACK_BLOCKED.has(error?.code)) {
+        && softwareDecoders.length
+        && SOFTWARE_ONLY_REFUSALS.has(error?.code)) {
+        try {
+          const loaded = await loadR3(input, loadId);
+          fellBackFrom = error.code;
+          events.emit('playback:fallback', { from: 'r1', to: 'r3', code: error.code });
+          return { ...loaded, fellBackFrom };
+        } catch (softwareError) {
+          if (loadId !== latestLoadId) throw softwareError;
+          // No decoder in this build claimed it, so the original named refusal
+          // is still the truest thing we can say.
+          recordError(error);
+          throw error;
+        }
+      }
+
+      if (nextMode === 'r1'
+        && forcePath === 'auto'
+        && loadId === latestLoadId
+        && !FALLBACK_BLOCKED.has(error?.code)
+        && !SOFTWARE_ONLY_REFUSALS.has(error?.code)) {
         try {
           const loaded = await loadR2(input, loadId);
           fellBackFrom = error?.code ?? 'ERR_NAKLIAMP_R1_FAILED';
