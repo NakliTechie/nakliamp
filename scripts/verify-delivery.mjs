@@ -108,7 +108,14 @@ const pagePolicy = index.match(/<meta http-equiv="Content-Security-Policy" conte
 assert(pagePolicy, 'The in-document Content-Security-Policy is missing.');
 assert(/connect-src 'self'/.test(pagePolicy), 'The page CSP permits an unexpected network destination.');
 assert(!/connect-src[^;]*https?:/.test(pagePolicy), 'The page CSP permits a remote HTTP connection.');
-assert(/<span class="version">v0\.2\.0-m1<\/span>/.test(index), 'The visible version label is missing.');
+// Derived, not hardcoded. A literal version here has gone stale at every bump
+// and failed a correct build for naming the wrong number.
+const declaredVersion = /<meta name="nakliamp-version" content="([^"]+)">/.exec(index)?.[1];
+assert(declaredVersion, 'index.html declares no version.');
+assert(
+  index.includes(`<span class="version">v${declaredVersion}</span>`),
+  `The visible version label does not match the declared version ${declaredVersion}.`,
+);
 
 assert(
   /Corresponding Mediabunny source is available[\s\S]*github\.com\/Vanilagy\/mediabunny\/tree\/v1\.51\.0/.test(vendor),

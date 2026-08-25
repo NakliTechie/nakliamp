@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="nakliamp-version" content="0.2.0-m1">
+<meta name="nakliamp-version" content="0.3.0-m2">
 <meta name="description" content="Play music files privately in your browser. Your audio stays on your device.">
 <meta name="theme-color" content="#161310">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
@@ -12,7 +12,7 @@
 :root{
   color-scheme:dark;
   --bg:#161310;--panel:#1f1a15;--panel-2:#26201a;--line:#3a3026;
-  --text:#efe8da;--muted:#9d9180;--faint:#6f6558;--accent:#e0a24a;
+  --text:#efe8da;--muted:#9d9180;--faint:#8a8172;--accent:#e0a24a;
   --accent-ink:#1a1206;--good:#8fbf7f;--warn:#d98c5f;--refuse:#d27464;
   --display:"Arial Rounded MT Bold","Trebuchet MS",system-ui,sans-serif;
   --body:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -28,14 +28,14 @@ body{background:
 button,input{font:inherit}
 button{color:inherit}
 button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}
+.shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto auto}
 .topbar{height:66px;padding:0 clamp(18px,4vw,54px);display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--line);background:rgba(22,19,16,.78);backdrop-filter:blur(18px)}
 .brand{font-family:var(--display);font-size:20px;font-weight:900;letter-spacing:-.04em}.brand em{font-style:normal;color:var(--accent)}
 .version{font:10px var(--mono);color:var(--faint);border:1px solid var(--line);padding:3px 7px;border-radius:999px}
 .path-chip{margin-left:auto;font:10px var(--mono);letter-spacing:.04em;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 36%,var(--line));padding:5px 9px;border-radius:999px}
 .path-chip:empty{display:none}
 main{min-height:0;display:grid;place-items:center;padding:clamp(24px,6vw,76px)}
-.screen{display:none;width:100%}.screen.on{display:block}
+.view{display:none;width:100%}.view.on{display:block}
 .empty{max-width:720px;margin:auto;text-align:center}
 .record-mark{width:92px;height:92px;margin:0 auto 25px;border-radius:50%;position:relative;border:1px solid #55442f;background:
   radial-gradient(circle,#161310 0 8%,#e0a24a 9% 14%,#17130f 15% 20%,#35291e 21% 23%,#17130f 24% 36%,#2f251c 37% 39%,#17130f 40% 55%,#2f251c 56% 58%,#17130f 59% 100%);
@@ -49,7 +49,7 @@ main{min-height:0;display:grid;place-items:center;padding:clamp(24px,6vw,76px)}
 .btn{min-height:42px;border:1px solid var(--line);border-radius:10px;padding:9px 16px;background:var(--panel-2);cursor:pointer}
 .btn:hover{border-color:#65513e}.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:750}
 .fine{margin-top:18px;color:var(--faint);font:10px/1.7 var(--mono);letter-spacing:.02em}
-.player{max-width:1040px;margin:auto}
+.now{max-width:1040px;margin:auto}
 .player-grid{display:grid;grid-template-columns:minmax(250px,390px) minmax(300px,1fr);gap:clamp(34px,7vw,86px);align-items:center}
 .art{aspect-ratio:1;border:1px solid var(--line);border-radius:24px;position:relative;overflow:hidden;background:
   linear-gradient(145deg,rgba(245,190,100,.86),rgba(140,75,34,.95) 45%,rgba(42,28,19,.98));box-shadow:0 35px 90px -38px rgba(224,162,74,.58)}
@@ -117,32 +117,97 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
 .vis-wrap.full{position:fixed;inset:0;z-index:50;margin:0;border-radius:0;border:0}
 .vis-wrap.full #vis{height:100vh}
 .vis-wrap.full .vis-bar{position:absolute;left:0;right:0;bottom:0;background:rgba(31,26,21,.86)}
+
+/* View tabs */
+.views{display:flex;gap:6px;margin-left:8px}
+.view-tab{min-height:32px;padding:5px 13px;border:1px solid var(--line);border-radius:999px;background:transparent;cursor:pointer;font:11px var(--mono);letter-spacing:.03em;color:var(--muted)}
+.view-tab:hover{border-color:#65513e;color:var(--text)}
+.view-tab.on{background:var(--panel-2);border-color:var(--accent);color:var(--accent)}
+.view-tab[hidden]{display:none}
+
+/* The persistent player bar */
+.playerbar{display:flex;align-items:center;gap:14px;padding:10px clamp(14px,3vw,28px);border-top:1px solid var(--line);background:rgba(26,22,18,.94);backdrop-filter:blur(18px);position:sticky;bottom:0;z-index:20}
+.playerbar[hidden]{display:none}
+.pb-art{width:46px;height:46px;flex:none;border-radius:9px;border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;padding:0;
+  background:linear-gradient(145deg,rgba(245,190,100,.8),rgba(140,75,34,.92) 50%,rgba(42,28,19,.98));
+  font-family:var(--display);font-weight:900;font-size:19px;color:rgba(255,245,225,.94)}
+.pb-art:hover{border-color:var(--accent)}
+.pb-track{min-width:0;flex:1 1 170px;max-width:290px}
+.pb-track b{display:block;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-track span{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-transport{display:flex;align-items:center;gap:7px;flex:none}
+.pb-transport .round{width:36px;height:36px;font-size:12px}
+.pb-transport .round.play{width:46px;height:46px;font-size:16px}
+.pb-time{display:grid;grid-template-columns:42px 1fr 42px;gap:9px;align-items:center;flex:1 1 220px;color:var(--faint);font:10px var(--mono)}
+.playerbar .volume-wrap{margin-left:0;flex:0 1 130px}
+
+/* A refusal is a banner about one file, not a screen that replaces everything */
+.refusal-banner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px clamp(14px,3vw,28px);
+  border-top:1px solid color-mix(in srgb,var(--refuse) 45%,var(--line));background:color-mix(in srgb,var(--refuse) 9%,var(--panel))}
+.refusal-banner[hidden]{display:none}
+.refusal-banner .code{font:10px var(--mono);letter-spacing:.09em;color:var(--refuse);text-transform:uppercase;flex:none}
+.refusal-body{min-width:0;flex:1 1 320px}
+.refusal-body strong{display:block;color:var(--refuse)}
+.refusal-body p{margin:3px 0 0;color:var(--muted);font-size:13px}
+.refusal-promise{display:block;margin-top:3px;font:10px var(--mono);color:var(--faint)}
+@media(max-width:760px){
+  .playerbar{flex-wrap:wrap;gap:9px}
+  .pb-time{order:5;flex-basis:100%}
+  .playerbar .volume-wrap{flex-basis:100px}
+  #open-another{display:none}
+}
 </style>
 </head>
 <body>
 <div class="shell">
   <header class="topbar">
     <div class="brand">Nakli<em>Amp</em></div>
-    <span class="version">v0.2.0-m1</span>
+    <span class="version">v0.3.0-m2</span>
+    <nav class="views" aria-label="Views">
+      <button class="view-tab on" id="tab-library" type="button" data-view="library">Library</button>
+      <button class="view-tab" id="tab-now" type="button" data-view="now" hidden>Now playing</button>
+    </nav>
     <span class="path-chip" id="path-chip"></span>
   </header>
 
   <main>
-    <section class="screen empty on" id="empty" aria-labelledby="empty-title">
+    <!-- Arrival. Shown only until there is a folder or a track. -->
+    <section class="view empty on" id="empty" aria-labelledby="empty-title">
       <div class="record-mark" aria-hidden="true"></div>
       <h1 id="empty-title" data-t="empty.title">Your music. Still yours.</h1>
-      <p class="lede" data-t="empty.body">Open one track from your device. NakliAmp plays it here without an upload, account, or analytics.</p>
+      <p class="lede" data-t="empty.body">Open one track, or point NakliAmp at your music folder. It plays here without an upload, account, or analytics.</p>
       <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-detail">
-        <p id="drop-detail" data-t="empty.drop">Drop an audio file here, or choose one from your device.</p>
+        <p id="drop-detail" data-t="empty.drop">Drop a folder or a file here, choose a folder from your device, or open a single track.</p>
         <div class="actions">
-          <button class="btn primary" id="open-file" type="button" data-t="action.open">Open audio file</button>
-          <button class="btn" id="open-folder" type="button" data-t="action.folder">Open a music folder</button>
+          <button class="btn primary" id="open-folder" type="button" data-t="action.folder">Open a music folder</button>
+          <button class="btn" id="open-file" type="button" data-t="action.open">Open a single file</button>
         </div>
-        <div class="fine">MP3 · FLAC · AAC/M4A · OPUS · OGG/VORBIS · WAV · MKA · and whatever else your browser can decode</div>
+        <div class="fine">MP3 · FLAC · AAC/M4A · OPUS · OGG/VORBIS · WAV · MKA · AIFF · CAF · AU · and whatever else your browser can decode</div>
       </div>
     </section>
 
-    <section class="screen player" id="player" aria-labelledby="track-name">
+    <!-- The library. The default view once a folder exists; browsing never stops playback. -->
+    <section class="view library" id="library" aria-labelledby="library-title">
+      <div class="lib-head">
+        <h2 id="library-title">Library</h2>
+        <input class="lib-search" id="lib-search" type="search" placeholder="Search your library" aria-label="Search your library" autocomplete="off">
+        <span class="lib-count" id="lib-count"></span>
+        <select class="lib-search" id="lib-playlist" aria-label="Playlists" hidden></select>
+        <button class="btn primary" id="lib-open" type="button">Open a music folder</button>
+        <button class="btn primary" id="lib-reopen" type="button" hidden>Reopen folder</button>
+        <button class="btn" id="lib-save" type="button">Save as playlist</button>
+        <button class="btn" id="lib-rename" type="button" hidden>Rename</button>
+        <button class="btn" id="lib-delete" type="button" hidden>Delete</button>
+        <button class="btn" id="lib-rescan" type="button">Rescan</button>
+        <button class="btn" id="lib-forget" type="button">Forget folder</button>
+      </div>
+      <p class="lib-scan" id="lib-scan" hidden></p>
+      <ul class="lib-list" id="lib-list"></ul>
+      <p class="lib-note">Your folder is read on your device. Nothing is uploaded, and the index never leaves this browser.</p>
+    </section>
+
+    <!-- Now playing. A place you choose to go, not where you are dumped. -->
+    <section class="view now" id="now" aria-labelledby="track-name">
       <div class="player-grid">
         <div class="art" aria-hidden="true"><span class="art-letter" id="art-letter">N</span></div>
         <div class="track">
@@ -150,19 +215,6 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
           <h1 class="track-name" id="track-name">Untitled track</h1>
           <p class="track-meta" id="track-meta">—</p>
           <div class="honesty" id="honesty" aria-label="Playback path"></div>
-          <div class="timeline">
-            <span id="elapsed">0:00</span>
-            <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek through track">
-            <span id="duration">0:00</span>
-          </div>
-          <div class="transport">
-            <button class="round" id="back" type="button" aria-label="Back 10 seconds">−10</button>
-            <button class="round play" id="play" type="button" aria-label="Play">▶</button>
-            <button class="round" id="forward" type="button" aria-label="Forward 10 seconds">+10</button>
-            <label class="volume-wrap"><span aria-hidden="true">◖</span><input id="volume" type="range" min="0" max="1" step="0.02" value="0.8" aria-label="Volume"></label>
-            <button class="btn open-another" id="open-another" type="button" data-t="action.another">Open another</button>
-            <button class="btn" id="show-library" type="button" data-t="action.library">Library</button>
-          </div>
           <div class="vis-wrap" id="vis-wrap">
             <canvas id="vis" aria-label="Spectrum visualiser" role="img"></canvas>
             <div class="vis-bar">
@@ -173,37 +225,43 @@ footer{min-height:48px;border-top:1px solid var(--line);display:flex;align-items
         </div>
       </div>
     </section>
-
-
-    <section class="screen library" id="library" aria-labelledby="library-title">
-      <div class="lib-head">
-        <h2 id="library-title">Library</h2>
-        <input class="lib-search" id="lib-search" type="search" placeholder="Search your library" aria-label="Search your library" autocomplete="off">
-        <span class="lib-count" id="lib-count"></span>
-        <button class="btn primary" id="lib-reopen" type="button" hidden>Reopen folder</button>
-        <select class="lib-search" id="lib-playlist" aria-label="Playlists" style="flex:0 1 200px" hidden></select>
-        <button class="btn" id="lib-save" type="button">Save as playlist</button>
-        <button class="btn" id="lib-rename" type="button" hidden>Rename</button>
-        <button class="btn" id="lib-delete" type="button" hidden>Delete</button>
-        <button class="btn" id="lib-rescan" type="button">Rescan</button>
-        <button class="btn" id="lib-forget" type="button">Forget folder</button>
-        <button class="btn" id="lib-close" type="button">Close</button>
-      </div>
-      <p class="lib-scan" id="lib-scan" hidden></p>
-      <ul class="lib-list" id="lib-list"></ul>
-      <p class="lib-note">Your folder is read on your device. Nothing is uploaded, and the index never leaves this browser.</p>
-    </section>
-    <section class="screen refusal" id="refusal" aria-labelledby="refusal-title">
-      <div class="code" id="refusal-code">ERR_NAKLIAMP_UNKNOWN</div>
-      <h2 id="refusal-title" data-t="refusal.title">This track stays closed.</h2>
-      <p id="refusal-message">NakliAmp could not open this audio file.</p>
-      <div class="refusal-card">
-        <strong data-t="refusal.promise">Nothing was uploaded.</strong>
-        <span data-t="refusal.detail"> The refusal came from the local playback ladder.</span>
-      </div>
-      <button class="btn primary" id="refusal-open" type="button" data-t="action.different">Choose a different file</button>
-    </section>
   </main>
+
+  <!-- The player bar. Persistent: what is playing must never be hidden by
+       what you are browsing. This is the whole point of the restructure. -->
+  <div class="playerbar" id="playerbar" hidden>
+    <button class="pb-art" id="pb-art" type="button" title="Now playing"><span id="pb-letter">N</span></button>
+    <div class="pb-track">
+      <b id="pb-title">Untitled track</b>
+      <span id="pb-sub">—</span>
+    </div>
+    <div class="pb-transport">
+      <button class="round" id="prev" type="button" aria-label="Previous track" title="Previous (P)">⏮</button>
+      <button class="round" id="back" type="button" aria-label="Back 10 seconds" title="Back 10s">−10</button>
+      <button class="round play" id="play" type="button" aria-label="Play">▶</button>
+      <button class="round" id="forward" type="button" aria-label="Forward 10 seconds" title="Forward 10s">+10</button>
+      <button class="round" id="next" type="button" aria-label="Next track" title="Next (N)">⏭</button>
+    </div>
+    <div class="pb-time">
+      <span id="elapsed">0:00</span>
+      <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek through track">
+      <span id="duration">0:00</span>
+    </div>
+    <label class="volume-wrap"><span aria-hidden="true">◖</span><input id="volume" type="range" min="0" max="1" step="0.02" value="0.8" aria-label="Volume"></label>
+    <button class="btn" id="open-another" type="button" data-t="action.another">Open another</button>
+  </div>
+
+  <!-- A refusal is about one file. It must not destroy the library or stop playback. -->
+  <div class="refusal-banner" id="refusal" role="alert" hidden>
+    <div class="code" id="refusal-code">ERR_NAKLIAMP_UNKNOWN</div>
+    <div class="refusal-body">
+      <strong id="refusal-title" data-t="refusal.title">This track stays closed.</strong>
+      <p id="refusal-message">NakliAmp could not open this audio file.</p>
+      <span class="refusal-promise" data-t="refusal.promise">Nothing was uploaded.</span>
+    </div>
+    <button class="btn" id="refusal-open" type="button" data-t="action.different">Choose a different file</button>
+    <button class="btn" id="refusal-dismiss" type="button" aria-label="Dismiss">Dismiss</button>
+  </div>
 
   <footer data-t="privacy">Local playback only · no account · no cookies · no analytics</footer>
 </div>
@@ -254,7 +312,7 @@ const t = key => STRINGS[locale]?.[key] ?? STRINGS.en[key] ?? key;
 document.querySelectorAll('[data-t]').forEach(element => { element.textContent = t(element.dataset.t); });
 
 const $ = selector => document.querySelector(selector);
-const screens = ['empty', 'player', 'refusal', 'library'];
+const VIEWS = ['empty', 'library', 'now'];
 // R3 decoders. The lean build ships the in-house PCM tier, which closes the
 // AIFF, AIFC, CAF and AU gap at no download cost. The full build appends the
 // wasm tier for the compressed long tail.
@@ -267,8 +325,28 @@ let toastTimer = 0;
 let frameId = 0;
 let seeking = false;
 
-function show(screen) {
-  for (const name of screens) $(`#${name}`).classList.toggle('on', name === screen);
+/**
+ * Switch the content view. The player bar and the library are no longer
+ * alternatives to each other: what is playing stays visible whatever you browse.
+ */
+function show(view) {
+  for (const name of VIEWS) $(`#${name}`).classList.toggle('on', name === view);
+  for (const tab of document.querySelectorAll('.view-tab')) {
+    tab.classList.toggle('on', tab.dataset.view === view);
+  }
+}
+
+/** Reveal the player bar and the Now-playing tab once there is something to play. */
+function revealPlayer() {
+  $('#playerbar').hidden = false;
+  $('#tab-now').hidden = false;
+}
+
+for (const tab of document.querySelectorAll('.view-tab')) {
+  tab.addEventListener('click', () => {
+    if (tab.dataset.view === 'library') openLibrary();
+    else show(tab.dataset.view);
+  });
 }
 
 function toast(message, timeoutMs = 2600) {
@@ -338,20 +416,40 @@ function renderTrack(state) {
   $('#seek').max = String(Math.max(0.01, state.media.duration || 0.01));
   $('#path-chip').textContent = { r1: 'R1 · REEL ENGINE', r2: 'R2 · NATIVE PASSTHROUGH', r3: 'R3 · SOFTWARE DECODE' }[state.path] ?? 'R2 · NATIVE PASSTHROUGH';
   honestyMarkup(state);
-  show('player');
+
+  $('#pb-title').textContent = stem(name);
+  $('#pb-sub').textContent = [state.track?.codec?.toUpperCase(), formatBytes(state.media.size)].filter(Boolean).join(' · ');
+  $('#pb-letter').textContent = stem(name).trim().slice(0, 1).toUpperCase() || 'N';
+  revealPlayer();
+  // Deliberately does not switch view: starting a track while browsing the
+  // library must not yank you out of the library.
+}
+
+/**
+ * A track that has reached its duration is finished, whatever the clock says.
+ * The engine keeps reporting `playing` after the last frame, which would leave
+ * a pause icon on a silent player forever.
+ */
+function hasEnded(state) {
+  const { positionS } = state.clock;
+  const { duration } = state.media;
+  return Boolean(duration) && Number.isFinite(duration) && positionS >= duration - 0.05;
 }
 
 function renderClock() {
   const state = engine.state();
   if (state.path) {
+    const ended = hasEnded(state);
+    const playing = state.clock.playing && !ended;
     $('#elapsed').textContent = formatTime(state.clock.positionS);
     if (!seeking) $('#seek').value = String(state.clock.positionS || 0);
-    $('#play').textContent = state.clock.playing ? 'Ⅱ' : '▶';
-    $('#play').setAttribute('aria-label', state.clock.playing ? 'Pause' : 'Play');
+    $('#play').textContent = playing ? 'Ⅱ' : '▶';
+    $('#play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    $('#prev').disabled = queueIndex <= 0;
+    $('#next').disabled = queueIndex < 0 || queueIndex >= queue.length - 1;
   }
-  if (state.path && state.clock.playing && !visualiser.running) visualiser.start();
-  if (state.path && queueIndex >= 0 && state.media.duration
-    && state.clock.positionS >= state.media.duration - 0.25 && !state.clock.playing) {
+  if (state.path && state.clock.playing && !hasEnded(state) && !visualiser.running) visualiser.start();
+  if (state.path && queueIndex >= 0 && hasEnded(state)) {
     if (!advancing) {
       advancing = true;
       advance(1).finally(() => { advancing = false; });
@@ -364,14 +462,20 @@ let advancing = false;
 function showRefusal(error) {
   const code = error?.code || 'ERR_NAKLIAMP_UNKNOWN';
   $('#refusal-code').textContent = code;
-  $('#refusal-message').textContent = error?.message || 'NakliAmp could not open this audio file.';
-  $('#path-chip').textContent = 'R4 · NAMED REFUSAL';
-  show('refusal');
+  // The engine's internal name means nothing to the person reading this.
+  $('#refusal-message').textContent = (error?.message || 'NakliAmp could not open this audio file.')
+    .replace(/\bReel\b/g, 'NakliAmp');
+  $('#refusal').hidden = false;
   toast(t('toast.error'));
+}
+
+function dismissRefusal() {
+  $('#refusal').hidden = true;
 }
 
 async function openMedia(input, { autoplay = true } = {}) {
   const loadId = ++uiLoadId;
+  dismissRefusal();
   toast(t('toast.open'), 10_000);
   try {
     await engine.load(input);
@@ -419,8 +523,13 @@ async function togglePlay() {
 
 $('#open-file').addEventListener('click', chooseFile);
 $('#open-another').addEventListener('click', chooseFile);
-$('#refusal-open').addEventListener('click', chooseFile);
+$('#refusal-open').addEventListener('click', () => { dismissRefusal(); chooseFile(); });
+$('#refusal-dismiss').addEventListener('click', dismissRefusal);
 $('#play').addEventListener('click', togglePlay);
+$('#prev').addEventListener('click', () => advance(-1));
+$('#next').addEventListener('click', () => advance(1));
+$('#pb-art').addEventListener('click', () => show('now'));
+$('#lib-open').addEventListener('click', () => openLibrary({ prompt: true }));
 $('#back').addEventListener('click', () => engine.seek(engine.state().clock.positionS - 10));
 $('#forward').addEventListener('click', () => engine.seek(engine.state().clock.positionS + 10));
 $('#seek').addEventListener('pointerdown', () => { seeking = true; });
@@ -548,6 +657,10 @@ async function renderLibrary() {
     : `${source.length} track${source.length === 1 ? '' : 's'}`;
   $('#lib-rename').hidden = !playlist;
   $('#lib-delete').hidden = !playlist;
+  // Controls that cannot act yet are hidden rather than shown dead.
+  const hasFolder = libraryTracks.length > 0;
+  $('#lib-open').hidden = hasFolder;
+  for (const id of ['lib-save', 'lib-rescan', 'lib-forget']) $(`#${id}`).hidden = !hasFolder;
   if (playlist && missing) {
     reportScan(`${playlist.name}: ${missing} of ${playlist.entries.length} entries are not in this folder.`);
   }
@@ -556,6 +669,7 @@ async function renderLibrary() {
     const empty = document.createElement('li');
     empty.className = 'lib-empty';
     empty.textContent = libraryTracks.length ? t('library.empty') : t('library.none');
+    if (!libraryTracks.length) reportScan('');
     list.append(empty);
     return;
   }
@@ -690,6 +804,17 @@ async function playQueueAt(index) {
   if (!track) return;
   const handle = await storedFolder();
   if (!handle) { reportScan('Reopen your music folder to play from the library.'); return; }
+
+  // A lapsed grant and a deleted file fail identically at getFile(), so the
+  // permission is checked first. Reporting "no longer in the folder" for a
+  // permission problem sends people looking for the wrong thing.
+  if (await grantState(handle) !== 'granted') {
+    if (await reclaimFolder(handle) !== 'granted') {
+      reportScan('NakliAmp needs permission to read your folder again. Use Reopen folder.');
+      $('#lib-reopen').hidden = false;
+      return;
+    }
+  }
 
   const file = await fileFromPath(handle, track.path);
   if (!file) { reportScan(`${track.path} is no longer in the folder. Rescan to update the library.`); return; }
@@ -972,7 +1097,7 @@ $('#lib-list').addEventListener('click', event => {
 });
 $('#lib-search').addEventListener('input', () => { renderLibrary(); });
 $('#lib-rescan').addEventListener('click', () => openLibrary({ prompt: true }));
-$('#lib-close').addEventListener('click', () => show(engine.state().path ? 'player' : 'empty'));
+
 $('#lib-forget').addEventListener('click', async () => {
   await forgetFolder();
   await clearLibrary();
@@ -982,7 +1107,7 @@ $('#lib-forget').addEventListener('click', async () => {
   reportScan(t('library.none'));
 });
 $('#open-folder').addEventListener('click', () => openLibrary({ prompt: true }));
-$('#show-library').addEventListener('click', () => openLibrary());
+
 addEventListener('pagehide', () => { rememberPosition(); releaseArt(); });
 
 if (new URLSearchParams(location.search).get('harness') === '1') {

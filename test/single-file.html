@@ -47,7 +47,7 @@ async function run() {
   assert(doc.body.textContent.includes('no analytics'), 'The sovereignty copy is missing.');
 
   await harness.open(await fixture('audio-mp3.mp3', app.File));
-  assert(doc.querySelector('#player').classList.contains('on'), 'The player did not open.');
+  assert(!doc.querySelector('#playerbar').hidden, 'The player bar did not appear.');
   assert(harness.state().path === 'r1', `The single file played on ${harness.state().path}, expected r1.`);
   await harness.play();
   await waitFor(() => harness.state().clock.positionS > 0.12, 'The clock did not advance.');
