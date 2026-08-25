@@ -258,10 +258,18 @@ function drawMatrix({ context, width, height, freq, palette, memory }) {
   context.globalAlpha = 1;
 }
 
-function drawStereo({ context, width, height, freq, palette }) {
-  const half = Math.floor(freq.length / 2);
-  const left = bars(freq.subarray(0, half), 24);
-  const right = bars(freq.subarray(half), 24);
+/**
+ * Left and right, from two real taps.
+ *
+ * This used to take the single summed spectrum and draw its lower half on one
+ * side and its upper half on the other — so the left "channel" was the bass of
+ * both channels and the right was the treble of both. There is no channel
+ * information in a mono analyser to recover, so the fix was upstream: the
+ * engine splits the rung and hands this two.
+ */
+function drawStereo({ context, width, height, freq, freqLeft, freqRight, palette }) {
+  const left = bars(freqLeft ?? freq, 24);
+  const right = bars(freqRight ?? freq, 24);
   const slot = (width / 2) / left.length;
   context.fillStyle = palette.accent;
   for (let index = 0; index < left.length; index += 1) {
@@ -289,7 +297,7 @@ export const MODES = Object.freeze([
   { id: 'classic-led', label: 'Classic LED', draw: drawClassicLed },
   { id: 'wave', label: 'Wave', draw: drawWave },
   { id: 'scope', label: 'Scope', draw: drawScope },
-  { id: 'stereo', label: 'Stereo', draw: drawStereo },
+  { id: 'stereo', label: 'Stereo', draw: drawStereo, stereo: true },
   { id: 'pulse', label: 'Pulse', draw: drawPulse },
   { id: 'bricks', label: 'Bricks', draw: drawBricks },
   { id: 'columns', label: 'Columns', draw: drawColumns },

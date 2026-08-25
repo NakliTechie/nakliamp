@@ -27,6 +27,9 @@ const PALETTE = Object.freeze({
 export function createVisualiser({
   canvas,
   getAnalyser,
+  // Only read for modes that declare `stereo`, so a build with no per-channel
+  // tap costs nothing and every other mode is unaffected.
+  getChannelAnalysers = () => null,
   palette = PALETTE,
   reducedMotion = () => false,
   onError = () => {},
@@ -42,6 +45,8 @@ export function createVisualiser({
   let memory = {};
   let freq = new Uint8Array(0);
   let wave = new Uint8Array(0);
+  let freqLeft = new Uint8Array(0);
+  let freqRight = new Uint8Array(0);
 
   function resize() {
     // Match the backing store to the display size, capped so a full-window
@@ -69,6 +74,22 @@ export function createVisualiser({
         }
         analyser.getByteFrequencyData(freq);
         analyser.getByteTimeDomainData(wave);
+        // A mode that draws two channels is given two channels. Where the rung
+        // cannot be split, both are the summed spectrum — which is what the
+        // file actually is when it is mono, and is at least not labelled as
+        // something it is not when it is not.
+        const channels = mode.stereo ? getChannelAnalysers() : null;
+        if (channels?.length === 2) {
+          if (freqLeft.length !== channels[0].frequencyBinCount) {
+            freqLeft = new Uint8Array(channels[0].frequencyBinCount);
+            freqRight = new Uint8Array(channels[1].frequencyBinCount);
+          }
+          channels[0].getByteFrequencyData(freqLeft);
+          channels[1].getByteFrequencyData(freqRight);
+        } else {
+          freqLeft = freq;
+          freqRight = freq;
+        }
       } else if (freq.length) {
         // No analyser: decay to silence rather than freezing the last frame,
         // which reads as a hang.
@@ -77,7 +98,7 @@ export function createVisualiser({
       }
       resize();
       drawFrame(mode, {
-        context, freq, wave, palette, memory,
+        context, freq, wave, freqLeft, freqRight, palette, memory,
         width: canvas.width, height: canvas.height,
       });
     } catch (error) {

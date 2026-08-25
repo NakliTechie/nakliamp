@@ -280,6 +280,8 @@ export function createNakliAmpEngine({
   let software = null;
   let analyser = null;
   let analyserOwner = null;
+  let splitter = null;
+  let channelAnalysers = null;
 
   function preferredMode() {
     if (forcePath === 'r1') return 'r1';
@@ -322,6 +324,49 @@ export function createNakliAmpEngine({
     }
   }
 
+  /**
+   * A tap per channel, for a visualiser that claims to show left and right.
+   *
+   * `audioAnalyser` is a single node on the summed output, so anything drawn
+   * from it has no channel information in it at all — a mode that split those
+   * bins in half and labelled the halves "left" and "right" was stating
+   * something the data could not support. A ChannelSplitterNode gives the two
+   * genuinely, on whichever rung is playing.
+   *
+   * A mono source up-mixes, so both taps report the same thing — which for a
+   * mono file is the truth rather than a stand-in for it.
+   *
+   * Returns null when the rung cannot be tapped; the caller then has one
+   * spectrum and should say so, not invent a second.
+   */
+  function audioChannelAnalysers() {
+    if (!mode) return null;
+    try {
+      const graph = rungGraph();
+      if (!graph) return null;
+      // Shares `analyserOwner` with the summed tap: both hang off the same
+      // output node and both go when that node is replaced.
+      if (channelAnalysers && analyserOwner === graph.output) return channelAnalysers;
+      // Building the summed tap first is what establishes the owner.
+      if (!audioAnalyser()) return null;
+      const split = graph.context.createChannelSplitter(2);
+      // In parallel, like the summed tap: never between output and destination.
+      graph.output.connect(split);
+      const taps = [0, 1].map(channel => {
+        const node = graph.context.createAnalyser();
+        node.fftSize = 2048;
+        node.smoothingTimeConstant = 0.72;
+        split.connect(node, channel);
+        return node;
+      });
+      splitter = split;
+      channelAnalysers = taps;
+      return taps;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function rungGraph() {
     if (mode === 'r3' && software) return { context: software.context, output: software.gain };
     if (mode === 'r1') return reel.audioGraph?.() ?? null;
@@ -355,7 +400,11 @@ export function createNakliAmpEngine({
 
   function disposeAnalyser() {
     try { analyser?.disconnect(); } catch (_) {}
+    try { splitter?.disconnect(); } catch (_) {}
+    for (const node of channelAnalysers ?? []) { try { node.disconnect(); } catch (_) {} }
     analyser = null;
+    splitter = null;
+    channelAnalysers = null;
     analyserOwner = null;
   }
 
@@ -938,6 +987,14 @@ export function createNakliAmpEngine({
     });
   }
 
+  /**
+   * Give everything back.
+   *
+   * The app never calls this — a player's teardown is the tab closing — but
+   * the engine is a separable module with its own consumers, and the gates
+   * lean on it to prove a load leaves nothing behind. It stays because
+   * "nothing in this page happens to call it" is not the same as unused.
+   */
   function destroy() {
     latestLoadId += 1;
     reel.pause();
@@ -961,6 +1018,7 @@ export function createNakliAmpEngine({
     setMuted,
     state,
     analyser: audioAnalyser,
+    analysers: audioChannelAnalysers,
     on: events.on,
     eventHistory: events.history,
     destroy,

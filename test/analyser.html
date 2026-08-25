@@ -91,6 +91,57 @@ async function run() {
     assert(engine.analyser() === engine.analyser(), 'A new analyser was built per call.');
   }
 
+  // Per-channel taps, on each rung, so "Stereo" is drawn from two channels
+  // rather than from the bass and treble halves of one summed spectrum.
+  //
+  // The mono case is the stronger evidence: a genuine discrete split of a
+  // one-channel source leaves the second channel silent, which is exactly what
+  // a spectrum cut in half could never show.
+  for (const [name, rung, channels] of [
+    ['audio-vorbis.ogg', 'r1', 2],
+    ['audio-pcm.aiff', 'r3', 1],
+  ]) {
+    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: DECODERS });
+    await engine.load(await fixture(name));
+    assert(engine.state().path === rung, `${name} loaded on ${engine.state().path}, expected ${rung}.`);
+    assert(engine.state().track.channels === channels,
+      `${name} has ${engine.state().track.channels} channels, expected ${channels}.`);
+    await engine.play();
+
+    const taps = engine.analysers();
+    assert(Array.isArray(taps) && taps.length === 2,
+      `${rung}: expected two per-channel analysers, got ${taps?.length}.`);
+    assert(taps[0] !== taps[1], `${rung}: both channels are the same node.`);
+    assert(taps[0] !== engine.analyser(), `${rung}: a channel tap is the summed tap.`);
+    assert(engine.analysers() === taps, `${rung}: new splitter nodes were built per call.`);
+
+    // The fixtures are about a second long, so the peak is accumulated across
+    // the whole of playback rather than sampled at one moment.
+    const bins = taps.map(node => new Uint8Array(node.frequencyBinCount));
+    const peaks = [0, 0];
+    const deadline = performance.now() + 2500;
+    while (performance.now() < deadline && peaks[0] <= 8) {
+      for (const [index, node] of taps.entries()) {
+        node.getByteFrequencyData(bins[index]);
+        for (const value of bins[index]) if (value > peaks[index]) peaks[index] = value;
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+
+    assert(peaks[0] > 8, `${rung}: the first channel stayed flat (peak ${peaks[0]}).`);
+    if (channels === 2) {
+      assert(peaks[1] > 8, `${rung}: the second channel stayed flat (peak ${peaks[1]}) for a stereo file.`);
+    } else {
+      assert(peaks[1] === 0,
+        `${rung}: a mono file put ${peaks[1]} into the second channel, so the split is not real.`);
+    }
+    assert(engine.state().clock.playing || engine.state().clock.positionS > 0,
+      `${rung}: splitting the output stopped playback.`);
+    engine.pause();
+    engine.destroy();
+    report[`${rung}Channels`] = peaks;
+  }
+
   return report;
 }
 

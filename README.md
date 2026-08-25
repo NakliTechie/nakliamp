@@ -55,7 +55,9 @@ next are both on screen, always.
 
 **A visualiser**, 14 modes plus None: Bars, Bars Dot, Bars Outline, Classic
 Peak, Classic LED, Wave, Scope, Stereo, Pulse, Bricks, Columns, Scatter, Flame,
-Matrix. `v` cycles, the picker selects, `V` goes full window. Reduced motion
+Matrix. **Stereo means stereo** — the engine splits whichever rung is playing
+into two taps, so a mono file shows one side silent rather than a picture
+invented from half a spectrum. `v` cycles, the picker selects, `V` goes full window. Reduced motion
 slows it rather than stopping it — that removes the movement, not the
 information.
 
@@ -161,7 +163,16 @@ only ingress, and a gate enforces it.
 That runs the static gates, the Node unit suites, and eight Chromium harnesses
 twice each, cold and warm: golden audio, UI smoke, the library scan gate, the
 library end-to-end gate, universal playback, the analyser tap, wasm decode,
-and the single-file release. Any console error or network request fails the run.
+and the single-file release.
+
+**Any console error fails the run, and so does any request to an origin other
+than the one serving the page** — whether or not it succeeds. That last part is
+what actually backs the no-analytics claim above; checking only for *failed*
+requests, which is what it used to do, would pass a working beacon.
+
+The release gate drives the two artifacts through the DOM alone. There is no
+test seam in them to drive: it is cut at build time, so the file the gate opens
+is the file you download, byte for byte.
 
 The end-to-end gate attaches a real folder and plays from it. A folder grant
 needs a user gesture no harness can give, so it uses an OPFS directory:

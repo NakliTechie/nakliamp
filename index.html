@@ -1014,6 +1014,7 @@ const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').match
 const visualiser = createVisualiser({
   canvas: $('#vis'),
   getAnalyser: () => engine.analyser(),
+  getChannelAnalysers: () => engine.analysers(),
   reducedMotion,
   onError: error => {
     // A failing mode is not a reason to lose the player. The driver has

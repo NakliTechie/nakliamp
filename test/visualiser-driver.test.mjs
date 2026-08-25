@@ -129,3 +129,37 @@ test('the mode reported after a failure is the one a caller can persist', () => 
     scheduler.restore();
   }
 });
+
+test('a stereo mode is given two channels, not one spectrum cut in half', () => {
+  const scheduler = fakeScheduler();
+  try {
+    // Distinct per-channel content, so a mode drawing the same array twice —
+    // or drawing halves of the summed one — is visible in what it draws.
+    const analyserFor = fill => ({
+      fftSize: 2048,
+      frequencyBinCount: 1024,
+      getByteFrequencyData: array => array.fill(fill),
+      getByteTimeDomainData: array => array.fill(128),
+    });
+    const summed = analyserFor(60);
+    const channels = [analyserFor(200), analyserFor(20)];
+
+    let asked = 0;
+    const visualiser = createVisualiser({
+      canvas: fakeCanvas(),
+      getAnalyser: () => summed,
+      getChannelAnalysers: () => { asked += 1; return channels; },
+    });
+
+    // A mode that does not declare stereo must not pay for the second tap.
+    visualiser.setMode('bars');
+    scheduler.frames.at(-1).callback();
+    assert.equal(asked, 0, 'a mono mode read the per-channel taps');
+
+    visualiser.setMode('stereo');
+    scheduler.frames.at(-1).callback();
+    assert.equal(asked, 1, 'the stereo mode did not read the per-channel taps');
+  } finally {
+    scheduler.restore();
+  }
+});

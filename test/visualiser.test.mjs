@@ -146,3 +146,27 @@ test('spectrum banding is logarithmic and bounded', () => {
   assert.equal(spectrumBand(freq, 0, 0), 0, 'an empty band must be zero, not NaN');
   assert.ok(Number.isFinite(spectrumBand(new Uint8Array(0), 0, 10)));
 });
+
+test('Stereo draws its two sides from its two channels', () => {
+  // The old mode split one summed spectrum in half and called the halves left
+  // and right, so the "left channel" was the bass of both channels. Feeding it
+  // a loud left and a silent right must now be visible in what it draws.
+  const loud = new Uint8Array(1024).fill(220);
+  const silent = new Uint8Array(1024).fill(0);
+  const context = recordingContext();
+  drawFrame(modeById('stereo'), frame({ context, freqLeft: loud, freqRight: silent }));
+
+  const rects = context.calls.filter(call => call.name === 'fillRect' && call.args[3] > 0);
+  const leftSide = rects.filter(call => call.args[0] < 320);
+  const rightSide = rects.filter(call => call.args[0] >= 320);
+  assert.ok(leftSide.length > 8, `the loud channel drew ${leftSide.length} bars`);
+  assert.equal(rightSide.length, 0, `the silent channel drew ${rightSide.length} bars`);
+
+  // And swapping the channels swaps the sides, rather than the picture being
+  // decided by which half of one array the bins came from.
+  const swapped = recordingContext();
+  drawFrame(modeById('stereo'), frame({ context: swapped, freqLeft: silent, freqRight: loud }));
+  const swappedRects = swapped.calls.filter(call => call.name === 'fillRect' && call.args[3] > 0);
+  assert.equal(swappedRects.filter(call => call.args[0] < 320).length, 0);
+  assert.ok(swappedRects.filter(call => call.args[0] >= 320).length > 8);
+});
