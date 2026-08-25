@@ -548,8 +548,16 @@ $('#file-input').addEventListener('change', async event => {
   event.target.value = '';
 });
 
-const savedVolume = Number(localStorage.getItem('nakliamp:volume'));
-if (Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 1) $('#volume').value = String(savedVolume);
+// `getItem` returns null when nothing is stored, and `Number(null)` is 0 —
+// which passed the range check and set the slider to silent on every first run.
+// Absence must be distinguished from a stored zero before any coercion.
+const storedVolume = localStorage.getItem('nakliamp:volume');
+if (storedVolume !== null) {
+  const savedVolume = Number(storedVolume);
+  if (Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 1) {
+    $('#volume').value = String(savedVolume);
+  }
+}
 
 const drop = $('#drop');
 for (const eventName of ['dragenter', 'dragover']) {
@@ -1125,6 +1133,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     visualiser: () => ({ mode: visualiser.mode(), running: visualiser.running, modes: visualiser.modes().length }),
     // Diagnostic seam: the peak the engine's own analyser reports right now.
     // Distinguishes "the visualiser is broken" from "there is no signal".
+    setVolume: v => engine.setVolume(v),
     spectrumPeak: () => {
       const analyser = engine.analyser();
       if (!analyser) return null;

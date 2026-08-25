@@ -140,16 +140,30 @@ async function run() {
   assert(!doc.querySelector('#playerbar').hidden, 'The player bar stayed hidden while playing.');
   assert(doc.querySelector('#pb-title').textContent.length > 0, 'The player bar shows no track.');
 
-  // 4. The spectrum tap is reachable and the visualiser is running.
+  // 4a. A cold first run must be audible.
   //
-  // Deliberately not asserting non-zero spectrum here. Against a synthetic WAV
-  // written into OPFS, the analyser reports a peak of 0 in headless Chromium
-  // while playback advances normally and the same tap returns a peak of 208
-  // against a committed fixture in a real browser. Whether that is a headless
-  // rendering quirk or a real gap is unresolved, and asserting either way
-  // would encode a guess. `test/analyser.html` covers the signal path; this
-  // gate covers the wiring.
-  assert(harness.spectrumPeak() !== null, 'The engine exposed no analyser while playing.');
+  // It was not. `localStorage.getItem` returns null when unset, `Number(null)`
+  // is 0, and 0 passed the 0..1 range check — so every first-time user got a
+  // silent player. Nothing caught it because every other gate measured the
+  // clock, which advances perfectly well at zero gain.
+  assert(
+    app.localStorage.getItem('nakliamp:volume') === null,
+    'This run is not cold: a stored volume would mask the first-run default.',
+  );
+  const volumeSlider = doc.querySelector('#volume');
+  assert(Number(volumeSlider.value) > 0,
+    `Cold start volume is ${volumeSlider.value}; a first run must not be silent.`);
+  assert(harness.state().clock.volume > 0,
+    `The engine is at volume ${harness.state().clock.volume} on a cold start.`);
+
+  // And the signal actually reaches the tap.
+  const peak = await waitFor(() => {
+    const value = harness.spectrumPeak();
+    return typeof value === 'number' && value > 8 ? value : false;
+  }, () => `The spectrum stayed silent (peak ${harness.spectrumPeak()}) at volume ${harness.state().clock.volume}.`, 6000);
+  assert(peak > 8, `Spectrum peak was ${peak}.`);
+
+  // 4b. The visualiser is running and the canvas is sized.
   assert(harness.visualiser().running, 'The visualiser is not running during playback.');
   const canvas = doc.querySelector('#vis');
   assert(canvas.width > 20 && canvas.height > 10,
@@ -189,7 +203,8 @@ async function run() {
     nested: true,
     viewWhilePlaying: harness.view(),
     queue: harness.queue(),
-    spectrumReachable: harness.spectrumPeak() !== null,
+    spectrumPeak: peak,
+    coldVolume: Number(doc.querySelector('#volume').value),
   };
 }
 
