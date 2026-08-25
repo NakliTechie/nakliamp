@@ -28,31 +28,70 @@ assert(
   'The standalone Custom Domain route is missing or unexpected.',
 );
 
-const expectedAllowlist = [
-  '!index.html',
-  '!VENDOR.md',
-  '!engine/',
-  '!engine/nakliamp-engine.mjs',
-  '!engine/reel-engine.mjs',
-  '!app/',
-  '!app/library/',
-  '!app/library/metadata.mjs',
-  '!app/library/store.mjs',
-  '!app/library/search.mjs',
-  '!app/library/scan.mjs',
-  '!app/library/scan-core.mjs',
-  '!app/library/scan-worker.mjs',
-  '!vendor/',
-  '!vendor/mediabunny/',
-  '!vendor/mediabunny/LICENSE-MPL-2.0.txt',
-  '!vendor/mediabunny/mediabunny-1.51.0.min.mjs',
-];
+// The allowlist is derived from what index.html actually imports, not written
+// by hand. It went stale once: four modules the app had started importing were
+// missing, so a deploy would have 404'd on them while this gate stayed green
+// because it and the allowlist were hardcoded to the same wrong answer.
+const SPECIFIER = /(?:from\s*|import\s*|new\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"]+)\1/g;
+
+async function reachableModules(entryScript) {
+  const found = new Set();
+  async function walk(path) {
+    if (found.has(path)) return;
+    found.add(path);
+    const source = await readFile(resolve(root, path), 'utf8');
+    for (const [, , specifier] of source.matchAll(SPECIFIER)) {
+      await walk(posixNormalize(dirname(path), specifier));
+    }
+  }
+  for (const [, , specifier] of entryScript.matchAll(SPECIFIER)) {
+    await walk(specifier.replace(/^\.\//, ''));
+  }
+  return [...found].sort();
+}
+
+function posixNormalize(base, specifier) {
+  const parts = base === '.' ? [] : base.split('/');
+  for (const segment of specifier.split('/')) {
+    if (segment === '.' || segment === '') continue;
+    if (segment === '..') parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join('/');
+}
+
+const inlineScript = index.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
+assert(inlineScript, 'index.html has no inline module script.');
+const modules = await reachableModules(inlineScript);
+assert(modules.length >= 10, `Only ${modules.length} modules reachable; the graph walk is wrong.`);
+
 const assetRules = assetsIgnore.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 assert(assetRules[0] === '*', 'The asset policy must begin by excluding every path.');
-assert(
-  JSON.stringify(assetRules.slice(1)) === JSON.stringify(expectedAllowlist),
-  `Unexpected asset allowlist: ${assetRules.slice(1).join(', ')}`,
-);
+const allowed = new Set(assetRules.slice(1).map(rule => rule.replace(/^!/, '')));
+
+// Every module the app imports must be published, or the hosted build breaks.
+for (const module of modules) {
+  assert(allowed.has(module), `${module} is imported but not in .assetsignore.`);
+}
+// And every directory on the way to it, since the allowlist is path-prefixed.
+for (const module of modules) {
+  const parts = module.split('/');
+  for (let depth = 1; depth < parts.length; depth += 1) {
+    const directory = `${parts.slice(0, depth).join('/')}/`;
+    assert(allowed.has(directory), `${directory} is on a published path but not in .assetsignore.`);
+  }
+}
+// Nothing may be published that the app does not need.
+const required = new Set([
+  'index.html', 'VENDOR.md', 'vendor/mediabunny/LICENSE-MPL-2.0.txt',
+  ...modules,
+  ...modules.flatMap(module => module.split('/').slice(0, -1)
+    .map((_, depth, parts) => `${parts.slice(0, depth + 1).join('/')}/`)),
+]);
+for (const rule of allowed) {
+  assert(required.has(rule), `${rule} is published but nothing imports it.`);
+}
+
 assert(!assetRules.includes('!_headers'), 'The _headers control file must not be published.');
 assert(!assetRules.includes('!wrangler.jsonc'), 'The Wrangler configuration must not be published.');
 
@@ -84,4 +123,7 @@ assert(
   'The standalone publication URL is missing.',
 );
 
-console.log(`PASS — Delivery policy: ${expectedAllowlist.filter(rule => !rule.endsWith('/')).length} public artifacts; strict CSP; source notice; Chromium-only gate`);
+console.log(
+  `PASS — Delivery policy: ${modules.length} modules reachable, all published; `
+  + 'strict CSP; source notice; Chromium-only gate',
+);
