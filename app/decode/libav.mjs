@@ -144,14 +144,6 @@ export async function decodeLibav(data) {
   }
 }
 
-function describe(frame) {
-  if (!frame) return 'none';
-  const outer = Array.isArray(frame.data) ? 'array' : frame.data?.constructor?.name;
-  const inner = Array.isArray(frame.data) ? (frame.data[0]?.constructor?.name ?? typeof frame.data[0]) : '-';
-  const len = Array.isArray(frame.data) ? frame.data[0]?.length : frame.data?.length;
-  return `${outer}/${inner} len=${len} rate=${frame.sample_rate} ch=${frame.channels}`;
-}
-
 /** libav frames arrive planar or packed depending on the codec; normalise both. */
 function collect(frames) {
   const first = frames[0];
