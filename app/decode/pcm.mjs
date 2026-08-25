@@ -21,6 +21,35 @@ const encodingError = (code, message) => {
   return error;
 };
 
+/**
+ * Hard limits on anything a file gets to declare.
+ *
+ * Every field below is read straight out of a header, so every one of them is
+ * attacker-controlled. A channel count of 0 makes the frame stride 0 and the
+ * decode loop runs forever on the main thread; a channel count of 4 billion
+ * asks for that many Float32Arrays before a single sample is read. Neither is
+ * a decode failure the caller can catch — the first hangs the tab and the
+ * second kills it — so both are rejected as malformed before any allocation.
+ */
+const MAX_CHANNELS = 64;
+
+/** True when `length` bytes actually exist at `offset`. */
+function has(view, offset, length) {
+  return offset >= 0 && length >= 0 && offset + length <= view.byteLength;
+}
+
+/**
+ * Every chunk header states a size. That size is a claim about the file, not a
+ * fact about the bytes present, and a truncated or hostile file makes the two
+ * disagree. Reading on the claim alone throws a raw `RangeError` out of
+ * DataView, which is not the named refusal this module promises.
+ */
+function requireBytes(view, offset, length, what) {
+  if (!has(view, offset, length)) {
+    throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', `This file claims ${what} that runs past the end of the file.`);
+  }
+}
+
 function ascii(view, offset, length) {
   let out = '';
   for (let index = 0; index < length; index += 1) out += String.fromCharCode(view.getUint8(offset + index));
@@ -97,9 +126,25 @@ function sampleReader(format) {
 
 /** Deinterleave into one Float32Array per channel. */
 function toChannels(view, dataOffset, dataLength, format) {
+  // Before anything is allocated or any loop is entered.
+  if (!Number.isInteger(format.channels) || format.channels < 1 || format.channels > MAX_CHANNELS) {
+    throw encodingError(
+      'ERR_NAKLIAMP_PCM_MALFORMED',
+      `This file declares ${format.channels} channels; 1 to ${MAX_CHANNELS} is readable.`,
+    );
+  }
+  if (!Number.isFinite(format.sampleRate) || format.sampleRate <= 0) {
+    throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', 'This file declares an impossible sample rate.');
+  }
+
   const read = sampleReader(format);
   const bytesPerSample = Math.ceil(format.bits / 8);
+  if (!(bytesPerSample >= 1)) {
+    throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', `This file declares ${format.bits}-bit samples.`);
+  }
   const stride = bytesPerSample * format.channels;
+  // `dataLength` is declared, so it is clamped to what the file actually holds:
+  // this is the bound that keeps the allocation below proportional to the file.
   const available = Math.min(dataLength, view.byteLength - dataOffset);
   const frames = Math.max(0, Math.floor(available / stride));
 
@@ -143,12 +188,14 @@ function decodeAiff(view) {
     const body = cursor + 8;
 
     if (id === 'COMM' && size >= 18) {
+      requireBytes(view, body, 18, 'a COMM chunk');
       const channels = view.getUint16(body);
       declaredFrames = view.getUint32(body + 2);
       const bits = view.getUint16(body + 6);
       const sampleRate = extendedFloat(view, body + 8);
       let variant = {};
       if (isAifc && size >= 22) {
+        requireBytes(view, body + 18, 4, 'an AIFC compression type');
         const compression = ascii(view, body + 18, 4);
         variant = AIFC_FORMATS.get(compression);
         if (!variant) {
@@ -161,6 +208,7 @@ function decodeAiff(view) {
       };
     } else if (id === 'SSND' && size >= 8) {
       // SSND begins with an offset and a block size before the samples.
+      requireBytes(view, body, 8, 'an SSND chunk');
       dataOffset = body + 8 + view.getUint32(body);
       dataLength = size - 8 - view.getUint32(body);
     }
@@ -186,12 +234,17 @@ function decodeCaf(view) {
   while (cursor + 12 <= view.byteLength) {
     const id = ascii(view, cursor, 4);
     // CAF chunk sizes are signed 64-bit; a size of -1 means "to end of file".
-    const high = view.getInt32(cursor + 4);
+    // Only that one sentinel is honoured. Every other value is read *unsigned*:
+    // a signed high word lets a file declare, say, -12, which misses the
+    // sentinel and sends `cursor = body + size` back to where it started —
+    // the walk below then spins forever on the main thread.
+    const high = view.getUint32(cursor + 4);
     const low = view.getUint32(cursor + 8);
-    const size = high === -1 && low === 0xffffffff ? -1 : high * 2 ** 32 + low;
+    const size = high === 0xffffffff && low === 0xffffffff ? -1 : high * 2 ** 32 + low;
     const body = cursor + 12;
 
     if (id === 'desc' && size >= 32) {
+      requireBytes(view, body, 32, 'a description chunk');
       const sampleRate = view.getFloat64(body);
       const formatId = ascii(view, body + 8, 4);
       if (formatId !== 'lpcm') {
@@ -240,6 +293,8 @@ const AU_ENCODINGS = new Map([
 ]);
 
 function decodeAu(view) {
+  // The AU header is 24 bytes; sniffing only proved the first 12 exist.
+  requireBytes(view, 0, 24, 'an AU header');
   const dataOffset = view.getUint32(4);
   const declaredLength = view.getUint32(8);
   const encoding = view.getUint32(12);
@@ -253,7 +308,9 @@ function decodeAu(view) {
   }
 
   const format = {
-    channels: channels || 1, sampleRate, signed: false, littleEndian: false,
+    // No `channels || 1` fallback: a header declaring 0 channels is malformed,
+    // and inventing a mono layout for it hides that from the person listening.
+    channels, sampleRate, signed: false, littleEndian: false,
     float: false, companding: null, ...variant,
   };
   // 0xFFFFFFFF means the writer did not know the length.
@@ -298,7 +355,10 @@ export function decodePcm(bytes) {
 
   const decoded = container === 'caf' ? decodeCaf(view) : container === 'au' ? decodeAu(view) : decodeAiff(view);
   if (!decoded.frames) throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', 'This file decoded to no audio.');
-  if (!(decoded.sampleRate > 0)) throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', 'This file declares no sample rate.');
+  // `> 0` alone lets Infinity through, and an infinite rate makes duration 0.
+  if (!Number.isFinite(decoded.sampleRate) || decoded.sampleRate <= 0) {
+    throw encodingError('ERR_NAKLIAMP_PCM_MALFORMED', 'This file declares no usable sample rate.');
+  }
 
   return {
     ...decoded,
