@@ -20,8 +20,9 @@ bouncing away in the corner.
 The nearer influence is [cliamp](https://github.com/bjarneo/cliamp), a terminal
 Winamp that got the shape right — the picker with live preview, the keyboard
 map, playlists as artifacts, the honest refusal. Where cliamp reaches thirteen
-streaming services, NakliAmp deliberately does not. `plan/cliamp-parity.md`
-tracks what was taken, what was adapted, and what was refused on purpose.
+streaming services, NakliAmp deliberately does not — a browser tab cannot run
+`yt-dlp`, and the services that a tab *could* reach are refused on charter
+rather than on feasibility.
 
 The part neither of them had: **the player tells you the truth about itself.**
 Every track shows its real path — container, codec, which decoder actually ran,
@@ -57,9 +58,10 @@ next are both on screen, always.
 Peak, Classic LED, Wave, Scope, Stereo, Pulse, Bricks, Columns, Scatter, Flame,
 Matrix. **Stereo means stereo** — the engine splits whichever rung is playing
 into two taps, so a mono file shows one side silent rather than a picture
-invented from half a spectrum. `v` cycles, the picker selects, `V` goes full window. Reduced motion
-slows it rather than stopping it — that removes the movement, not the
-information.
+invented from half a spectrum.
+
+`v` cycles, the picker selects, `V` goes full window. Reduced motion slows it
+rather than stopping it — that removes the movement, not the information.
 
 ## What it plays
 
@@ -193,7 +195,6 @@ nothing.
 
 ## Not built yet
 
-Stated plainly rather than implied by omission: gapless
-playback, the equaliser, Media Session integration, and the compact/full
-duality. `plan/cliamp-parity.md` holds the full feature target and
-`plan/workplan.md` the order.
+Stated plainly rather than implied by omission: gapless playback, the
+equaliser, Media Session integration, the compact/full duality, and a
+keyboard-map overlay. Nothing on that list is refused — none of it is built.
