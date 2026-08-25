@@ -288,10 +288,15 @@ export function createNakliAmpEngine({
    */
   function audioAnalyser() {
     if (!mode) return null;
-    if (analyser && analyserOwner === mode) return analyser;
     try {
       const graph = rungGraph();
       if (!graph) return null;
+      // Keyed on the output node itself, not on the rung. The engine builds a
+      // fresh gain node for each track, so a tap cached per rung stays bolted
+      // to a node that has been replaced and reports silence for every track
+      // after the first.
+      if (analyser && analyserOwner === graph.output) return analyser;
+      disposeAnalyser();
       const next = graph.context.createAnalyser();
       next.fftSize = 2048;
       next.smoothingTimeConstant = 0.72;
@@ -299,7 +304,7 @@ export function createNakliAmpEngine({
       // output and the destination, where a mistake would silence playback.
       graph.output.connect(next);
       analyser = next;
-      analyserOwner = mode;
+      analyserOwner = graph.output;
       return analyser;
     } catch (_) {
       return null;

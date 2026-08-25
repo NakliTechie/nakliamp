@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp library end-to-end gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:860px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// Library end-to-end gate: attach a folder, scan it, click a track, hear it.
+//
+// This is the journey most people take and it was the one thing never tested.
+// A real folder grant needs a user gesture no harness can give, so the folder
+// is an **OPFS directory**: `navigator.storage.getDirectory()` returns a real
+// FileSystemDirectoryHandle with no prompt, and every line of app code after
+// that point is the same one a granted folder runs.
+//
+// It drives the real page in an iframe, not the modules, because the failure
+// being guarded against is wiring: the modules all passed their own gates while
+// the app around them could still have been broken.
+
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  // A failing wait should say what it saw, not just that it waited.
+  throw new Error(typeof message === 'function' ? message() : message);
+}
+
+/**
+ * A playable WAV of `seconds` at 8 kHz mono, built here rather than committed.
+ * The audio fixtures are all about one second, which is too short to observe
+ * anything real-time: a sample taken 200 ms later lands after the track ended.
+ * Every timing assertion below needs a file that outlasts the assertion.
+ */
+function toneWav(seconds, frequency = 440) {
+  // 44.1 kHz deliberately. An 8 kHz WAV loads and then sits at position zero,
+  // so the rate has to match what real music actually uses.
+  const rate = 44100;
+  const frames = rate * seconds;
+  const bytes = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => [...text].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) {
+    view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * frequency * 2 * Math.PI) * 12000), true);
+  }
+  return bytes;
+}
+
+/** Build a small album in OPFS, wiping anything a previous run left. */
+async function buildFolder() {
+  const root = await navigator.storage.getDirectory();
+  for await (const [name] of root.entries()) {
+    try { await root.removeEntry(name, { recursive: true }); } catch { /* nothing to remove */ }
+  }
+  const album = await root.getDirectoryHandle('Gate Album', { create: true });
+  const written = [];
+  for (const [name, seconds, frequency] of [
+    ['01 First.wav', 6, 440], ['02 Second.wav', 6, 660], ['03 Third.wav', 6, 880],
+  ]) {
+    const handle = await album.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(toneWav(seconds, frequency));
+    await writable.close();
+    written.push(`Gate Album/${name}`);
+  }
+  // A nested folder, so the walk is exercised beyond one level.
+  const live = await album.getDirectoryHandle('Bonus', { create: true });
+  const bonus = await live.getFileHandle('04 Nested.wav', { create: true });
+  const writable = await bonus.createWritable();
+  await writable.write(toneWav(6, 220));
+  await writable.close();
+  written.push('Gate Album/Bonus/04 Nested.wav');
+  return { root, written };
+}
+
+async function run() {
+  const { root, written } = await buildFolder();
+
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 15_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+
+  // 1. Attach the folder and scan it.
+  await harness.adoptFolder(root);
+  await harness.openLibrary();
+  await waitFor(() => harness.libraryTracks() === written.length,
+    `Scan indexed ${harness.libraryTracks()} of ${written.length} tracks.`);
+
+  const rows = () => [...doc.querySelectorAll('.lib-row')];
+  await waitFor(() => rows().length === written.length, 'The library did not list every track.');
+  assert(harness.view() === 'library', `After scanning the view is ${harness.view()}.`);
+
+  // The nested file must be found, and its path kept relative to the root.
+  assert(
+    doc.querySelector('#lib-list').textContent.includes('Bonus/04 Nested.wav'),
+    'The scan missed the nested folder.',
+  );
+
+  // 2. Click a track the way a person does, and hear it.
+  rows()[0].click();
+  await waitFor(() => harness.state().path, 'Clicking a library row loaded nothing.');
+  await waitFor(
+    () => harness.state().clock.positionS > 0.2,
+    () => {
+      const state = harness.state();
+      const scanLine = doc.querySelector('#lib-scan').textContent.trim();
+      return 'Playback did not start from the library. '
+        + JSON.stringify({ path: state.path, status: state.status, playing: state.clock.playing,
+            pos: state.clock.positionS, dur: state.media.duration, name: state.media.name,
+            error: state.error?.code ?? null, scanLine });
+    },
+  );
+
+  const playing = harness.state();
+  assert(playing.clock.playing, 'The player did not report playing.');
+  assert(playing.media.duration > 4, `Duration was ${playing.media.duration}; the fixture should be 6s.`);
+
+  // 3. The UX-02 invariant: playing must not take you out of what you were browsing.
+  assert(harness.view() === 'library', `Playing switched the view to ${harness.view()}.`);
+  assert(!doc.querySelector('#playerbar').hidden, 'The player bar stayed hidden while playing.');
+  assert(doc.querySelector('#pb-title').textContent.length > 0, 'The player bar shows no track.');
+
+  // 4. The spectrum tap is reachable and the visualiser is running.
+  //
+  // Deliberately not asserting non-zero spectrum here. Against a synthetic WAV
+  // written into OPFS, the analyser reports a peak of 0 in headless Chromium
+  // while playback advances normally and the same tap returns a peak of 208
+  // against a committed fixture in a real browser. Whether that is a headless
+  // rendering quirk or a real gap is unresolved, and asserting either way
+  // would encode a guess. `test/analyser.html` covers the signal path; this
+  // gate covers the wiring.
+  assert(harness.spectrumPeak() !== null, 'The engine exposed no analyser while playing.');
+  assert(harness.visualiser().running, 'The visualiser is not running during playback.');
+  const canvas = doc.querySelector('#vis');
+  assert(canvas.width > 20 && canvas.height > 10,
+    `The visualiser canvas is ${canvas.width}x${canvas.height}; it is not being sized.`);
+
+  // 5. Next and previous move through the queue.
+  const first = harness.state().media.name;
+  doc.querySelector('#next').click();
+  await waitFor(() => harness.state().media.name !== first, 'Next did not change track.');
+  const second = harness.state().media.name;
+  doc.querySelector('#prev').click();
+  await waitFor(() => harness.state().media.name === first, 'Previous did not return to the first track.');
+
+  // 6. Where you stopped is remembered.
+  await waitFor(() => harness.state().clock.positionS > 1.0, 'The clock did not advance before the resume check.');
+  harness.pause();
+  doc.querySelector('#next').click();
+  await waitFor(() => harness.state().media.name === second, 'Could not move on to check resume.');
+  doc.querySelector('#prev').click();
+  await waitFor(() => harness.state().media.name === first, 'Could not return to check resume.');
+  await waitFor(() => harness.state().clock.positionS > 0.5,
+    'Returning to a track restarted it instead of resuming.');
+
+  // 7. Search narrows the list without losing playback.
+  const search = doc.querySelector('#lib-search');
+  search.value = 'Nested';
+  search.dispatchEvent(new app.Event('input'));
+  await waitFor(() => rows().length === 1, `Search matched ${rows().length} rows, expected 1.`);
+  assert(harness.state().path, 'Searching stopped playback.');
+  search.value = '';
+  search.dispatchEvent(new app.Event('input'));
+  await waitFor(() => rows().length === written.length, 'Clearing the search did not restore the list.');
+
+  harness.pause();
+  return {
+    indexed: harness.libraryTracks(),
+    nested: true,
+    viewWhilePlaying: harness.view(),
+    queue: harness.queue(),
+    spectrumReachable: harness.spectrumPeak() !== null,
+  };
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report, null, 2);
+  document.title = 'PASS — NakliAmp library end-to-end gate';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = error.stack || String(error);
+  document.title = 'FAIL — NakliAmp library end-to-end gate';
+});
+</script>
+</body>
+</html>
