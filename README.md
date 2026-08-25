@@ -106,6 +106,14 @@ not patch it. Engine changes land upstream in Reel first and are pulled down.
 See `VENDOR.md` for file hashes and the corresponding-source notice. NakliAmp
 never imports Mediabunny directly; the pinned engine is the only ingress.
 
+## No CI
+
+There is no continuous integration and no GitHub Actions workflow. Every gate
+runs on your machine, because the real ones need a real browser: the harnesses
+drive Chromium against committed fixtures and fail on any console error or
+network request. A green tick from a runner that cannot open an audio context
+would mean less than nothing.
+
 ## Verification
 
 ```sh
