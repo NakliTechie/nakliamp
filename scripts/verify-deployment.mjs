@@ -76,7 +76,7 @@ const forbidden = [
   '/_headers',
   '/wrangler.jsonc',
   '/README.md',
-  '/nakliamp-agent-handoff.md',
+  '/dist/nakliamp.html',
   '/scripts/verify-browser.sh',
   '/test/ui-smoke.html',
   '/.git/config',
