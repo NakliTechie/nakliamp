@@ -1,8 +1,9 @@
 // R3 software decode, wasm tier: the compressed formats no browser decodes.
 //
-// WMA (v1, v2, Pro, Lossless) and WavPack, through a custom libav.js build
-// configured with exactly those decoders and their demuxers — 1.1 MB of wasm,
-// not a general-purpose ffmpeg. See VENDOR.md for the build and its LGPL terms.
+// WMA (v1, v2, Pro, Lossless), WavPack, Monkey's Audio, Musepack (SV7 and SV8),
+// TTA and DSD, through a custom libav.js build carrying exactly those decoders
+// and their demuxers — 1.2 MB of wasm, not a general-purpose ffmpeg. See
+// VENDOR.md for the build and its LGPL terms.
 //
 // This tier is separate from the in-house PCM tier because it costs a download.
 // The lean build ships only the PCM tier; the full build appends this one.
@@ -22,8 +23,12 @@ const READ_LIMIT = 256 * 1024 * 1024;
 const SIGNATURES = [
   // ASF/WMA: the ASF header GUID.
   { container: 'wma', bytes: [0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11] },
-  // WavPack.
-  { container: 'wavpack', bytes: [0x77, 0x76, 0x70, 0x6b] },
+  { container: 'wavpack', bytes: [0x77, 0x76, 0x70, 0x6b] },          // 'wvpk'
+  { container: 'ape', bytes: [0x4d, 0x41, 0x43, 0x20] },              // 'MAC '
+  { container: 'musepack', bytes: [0x4d, 0x50, 0x43, 0x4b] },         // 'MPCK' (SV8)
+  { container: 'musepack', bytes: [0x4d, 0x50, 0x2b] },               // 'MP+'  (SV7)
+  { container: 'tta', bytes: [0x54, 0x54, 0x41, 0x31] },              // 'TTA1'
+  { container: 'dsd', bytes: [0x44, 0x53, 0x44, 0x20] },              // 'DSD '
 ];
 
 function startsWith(data, signature) {
@@ -57,13 +62,18 @@ async function libav() {
     // The single-file build embeds the wasm bytes rather than a URL, so the
     // artifact fetches nothing. Everywhere else the file sits beside the glue.
     const wasmBinary = globalThis.__nakliampWasmBinary;
-    return LibAV.LibAV({
+    const instance = await LibAV.LibAV({
       noworker: true,
       nothreads: true,
       variant: 'nakliamp',
       base: BASE_URL.href,
       factory: wasmBinary ? options => factory({ ...options, wasmBinary }) : factory,
     });
+    // ffmpeg logs informational lines to stderr, which emscripten routes to
+    // console.error. The harness fails a run on any console error, and an
+    // estimated-duration notice is not one.
+    await instance.av_log_set_level(instance.AV_LOG_QUIET);
+    return instance;
   })();
   return modulePromise;
 }

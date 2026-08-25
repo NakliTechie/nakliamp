@@ -18,7 +18,7 @@ for (const fixture of manifest.fixtures) {
   if (digest !== fixture.sha256) throw new Error(`${fixture.file}: SHA-256 changed.`);
 }
 
-const mediaFiles = (await readdir(fixtureRoot)).filter(file => /\.(aac|aif|aiff|ape|au|caf|flac|m4a|mka|mp3|ogg|opus|wav|wave|wma|wv)$/i.test(file));
+const mediaFiles = (await readdir(fixtureRoot)).filter(file => /\.(aac|aif|aiff|ape|au|caf|flac|m4a|mka|mp3|ogg|opus|wav|wave|wma|wv|ape|mpc|tta|dsf)$/i.test(file));
 for (const file of mediaFiles) {
   if (!declared.has(file)) throw new Error(`${file}: undeclared golden fixture.`);
 }
@@ -33,6 +33,6 @@ const r3 = manifest.fixtures.filter(item => item.role === 'audio-r3').length;
 if (r3 !== 3) throw new Error('The gate requires three R3 software-decode fixtures.');
 // Formats only the wasm tier can decode; the lean build must still refuse them.
 const wasm = manifest.fixtures.filter(item => item.role === 'audio-wasm').length;
-if (wasm !== 2) throw new Error('The gate requires two wasm-decode fixtures.');
+if (wasm !== 6) throw new Error('The gate requires six wasm-decode fixtures.');
 
 console.log(`PASS — Golden audio: ${manifest.fixtures.length} files; 7 positives; 1 WMA refusal; ${r3} R3; ${wasm} wasm`);

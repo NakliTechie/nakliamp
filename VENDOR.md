@@ -17,8 +17,8 @@ NakliAmp vendors Reel's public engine boundary without modification.
 | `engine/reel-engine.mjs` | `791a691fd8d0d95c9cf7fd27adf3bad2469c918f15e30ed9e57f05d0dad4c175` |
 | `vendor/mediabunny/mediabunny-1.51.0.min.mjs` | `1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b` |
 | `vendor/mediabunny/LICENSE-MPL-2.0.txt` | `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04` |
-| `vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm` | `721e5c83cb42d1ceb880dda3be03e9a064e4031c7216814a12d91cc523942512` |
-| `vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs` | `4894c3a8ccce82024f90428d75900855609de1a574eef6a00f7601a2048563ac` |
+| `vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm` | `e2a952132a942ee59f7d7624378e4f60568d120157e428e82a59e06b5ead7829` |
+| `vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs` | `4c679eab179d5f9307611fb349edca62cf264a511ebbf66aaa94ea795a6cd4b6` |
 | `vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs` | `272cef7c32705b2e70290cf4698350e2c888b00b789f11a97386195aa5d0b691` |
 | `vendor/libav/LICENSE-LGPL-2.1.txt` | `20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95` |
 | `vendor/libav/LICENSE-LGPL-NOTICE.md` | `afb8d248e345d343a45f74a5666f850d1920fb5a0006621a5a45e570687933bf` |
@@ -33,11 +33,18 @@ Built from `https://github.com/Yahweasel/libav.js` at tag `v6.10.9.0` with a
 custom variant, because no prebuilt variant carries these codecs:
 
 ```sh
-node configs/mkconfig.js nakliamp '["audio-filters","demuxer-asf","decoder-wmav1",
-  "decoder-wmav2","decoder-wmapro","decoder-wmalossless","demuxer-wavpack",
-  "decoder-wavpack"]'
+node configs/mkconfig.js nakliamp '["avformat","avcodec","avfilter","swresample",
+  "audio-filters","demuxer-asf","decoder-wmav1","decoder-wmav2","decoder-wmapro",
+  "decoder-wmalossless","demuxer-wavpack","decoder-wavpack","demuxer-ape",
+  "decoder-ape","demuxer-mpc","demuxer-mpc8","decoder-mpc7","decoder-mpc8",
+  "demuxer-tta","decoder-tta","demuxer-dsf","decoder-dsd_lsbf","decoder-dsd_msbf",
+  "decoder-dsd_lsbf_planar","decoder-dsd_msbf_planar"]'
 make build-nakliamp
 ```
+
+The four library components come first and are not optional: without
+`avformat`, `avcodec`, `avfilter` and `swresample` the frontend binds none of
+its high-level helpers and the instance is unusable.
 
 Build it inside libav.js's own `emscripten/emsdk` Docker image. A local
 Homebrew emscripten 6.0.1 produces an **empty `libavutil.a`** and the link

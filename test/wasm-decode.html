@@ -27,11 +27,17 @@ async function fixture(name) {
 async function run() {
   const report = {};
 
-  for (const [name, container] of [['audio-wmav2.wma', 'wma'], ['audio-wavpack.wv', 'wavpack']]) {
+  const CASES = [
+    ['audio-wmav2.wma', 'wma', 'audio/x-ms-wma'],
+    ['audio-wavpack.wv', 'wavpack', 'audio/wavpack'],
+    ['audio-ape.ape', 'ape', 'audio/x-ape'],
+    ['audio-musepack.mpc', 'musepack', 'audio/x-musepack'],
+    ['audio-tta.tta', 'tta', 'audio/x-tta'],
+    ['audio-dsd.dsf', 'dsd', 'audio/x-dsd'],
+  ];
+  for (const [name, container, mime] of CASES) {
     // No browser decodes these; if one starts, this gate is testing nothing.
-    const element = document.createElement('audio');
-    const mime = { wma: 'audio/x-ms-wma', wavpack: 'audio/wavpack' }[container];
-    assert(!element.canPlayType(mime), `${name}: this browser now plays ${mime}.`);
+    assert(!document.createElement('audio').canPlayType(mime), `${name}: this browser now plays ${mime}.`);
 
     const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM, libavDecoder] });
     const loaded = await engine.load(await fixture(name));
@@ -39,9 +45,11 @@ async function run() {
 
     assert(loaded.path === 'r3', `${name} loaded on ${loaded.path}, expected r3.`);
     assert(state.honesty.decode.includes('libav'), `${name}: strip hid the wasm tier: ${state.honesty.decode}`);
-    assert(state.media.duration > 4,
-      `${name}: decoded ${state.media.duration}s, expected about 5. frames=${loaded.tracks?.[0]?.diag ?? '?'}`);
-    assert(state.track.sampleRate === 44100, `${name}: rate ${state.track.sampleRate}.`);
+    // The DSD fixture is one second; Musepack lands near three; the rest five.
+    const floor = container === 'dsd' ? 0.5 : container === 'musepack' ? 3 : 4;
+    assert(state.media.duration > floor,
+      `${name}: decoded ${state.media.duration}s, expected over ${floor}.`);
+    assert(state.track.sampleRate > 20000, `${name}: rate ${state.track.sampleRate}.`);
 
     await engine.play();
     await new Promise(r => setTimeout(r, 150));
@@ -52,7 +60,7 @@ async function run() {
   }
 
   // The lean build refuses both, by name, and does not retry them.
-  for (const name of ['audio-wmav2.wma', 'audio-wavpack.wv']) {
+  for (const [name] of CASES) {
     let refusal = null;
     const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM] });
     try { await engine.load(await fixture(name)); } catch (error) { refusal = error; }

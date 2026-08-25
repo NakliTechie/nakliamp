@@ -85,13 +85,10 @@ and Chrome decodes none of them by either other path. They are uncompressed, so
 closing that gap needed a header parser rather than a codec, and it costs no
 download.
 
-**On the software rung, heavy build only:** WMA (v1, v2, Pro, Lossless) and
-WavPack, through a custom 1.1 MB libav build carrying exactly those decoders.
-The lean build refuses them by name; a build's decoders are a property of that
-build.
-
-**Refused, by name, everywhere:** Monkey's Audio, Musepack and DSD. No
-libav.js fragment exists for them.
+**On the software rung, heavy build only:** WMA (v1, v2, Pro, Lossless),
+WavPack, Monkey's Audio, Musepack (SV7 and SV8), TTA and DSD — through a custom
+1.2 MB libav build carrying exactly those decoders and nothing else. The lean
+build refuses them by name; a build's decoders are a property of that build.
 
 Two more consequences worth knowing: **a file carrying video plays its audio**
 rather than being refused, and **a refusal is a dismissible banner**, not a
@@ -135,7 +132,7 @@ demuxer, about 0.9 MB, no external references. Save it anywhere and open it,
 including straight off your filesystem over `file://`.
 
 **Single file, full.** `dist/nakliamp-full.html` — the same plus the wasm
-software decoder, about 2.7 MB. Adds WMA and WavPack. The wasm is embedded as
+software decoder, about 2.8 MB. Adds WMA, WavPack, Monkey's Audio, Musepack, TTA and DSD. The wasm is embedded as
 bytes, so it still fetches nothing.
 
 ```sh
@@ -185,7 +182,7 @@ nothing.
 
 ## Not built yet
 
-Stated plainly rather than implied by omission: Monkey's Audio, Musepack and DSD; gapless
+Stated plainly rather than implied by omission: gapless
 playback, the equaliser, Media Session integration, and the compact/full
 duality. `plan/cliamp-parity.md` holds the full feature target and
 `plan/workplan.md` the order.

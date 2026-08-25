@@ -83,6 +83,30 @@
       "bytes": 116431,
       "sha256": "289d0e25b7cd522142a6b20c1954b662cbf5b017d7db8fa29920bf0620dc17f5",
       "role": "audio-wasm"
+    },
+    {
+      "file": "audio-ape.ape",
+      "bytes": 60462,
+      "sha256": "c8ff12680a4b6871688403306eb4526b318789a0ae8b3a8d1ad6ae07446b7053",
+      "role": "audio-wasm"
+    },
+    {
+      "file": "audio-musepack.mpc",
+      "bytes": 25563,
+      "sha256": "cc3b3f8522e63cbcee1ba35906db0a6f6dc8138d5de51f9642c25b3c6211f9bf",
+      "role": "audio-wasm"
+    },
+    {
+      "file": "audio-tta.tta",
+      "bytes": 72918,
+      "sha256": "8cb7881bc3d7db620240509adae457cdb21c7f95087d23f4806f7d13981ec0ba",
+      "role": "audio-wasm"
+    },
+    {
+      "file": "audio-dsd.dsf",
+      "bytes": 356444,
+      "sha256": "8067b86d8ebe29fea8ff41c139a8ff13b1d9538fd10c6f0c3ca683bb80482394",
+      "role": "audio-wasm"
     }
   ]
 }
