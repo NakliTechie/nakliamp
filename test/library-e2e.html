@@ -28,12 +28,14 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 async function waitFor(check, message, timeoutMs = 15_000) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
-    const value = check();
+    // The check may be async: reading a file back off disk is how the playlist
+    // assertions observe what the app actually wrote.
+    const value = await check();
     if (value) return value;
     await new Promise(resolve => setTimeout(resolve, 40));
   }
   // A failing wait should say what it saw, not just that it waited.
-  throw new Error(typeof message === 'function' ? message() : message);
+  throw new Error(typeof message === 'function' ? await message() : message);
 }
 
 /**
@@ -85,7 +87,48 @@ async function buildFolder() {
   await writable.write(toneWav(6, 220));
   await writable.close();
   written.push('Gate Album/Bonus/04 Nested.wav');
+
+  // A playlist in its own subfolder, holding the three kinds of entry an edit
+  // used to destroy: a remote stream, a file the index has never seen, and
+  // tracks that live outside the playlist's own directory.
+  const lists = await root.getDirectoryHandle('Lists', { create: true });
+  const playlist = await lists.getFileHandle(PLAYLIST_NAME, { create: true });
+  const writer = await playlist.createWritable();
+  await writer.write(PLAYLIST_SOURCE);
+  await writer.close();
+
   return { root, written };
+}
+
+const PLAYLIST_NAME = 'Gate Mix.m3u8';
+const PLAYLIST_PATH = `Lists/${PLAYLIST_NAME}`;
+const PLAYLIST_SOURCE = [
+  '#EXTM3U',
+  '#PLAYLIST:Gate Mix',
+  '#EXTINF:-1,Somewhere Else',
+  'https://example.invalid/stream.aac',
+  '#EXTINF:6,First',
+  '../Gate Album/01 First.wav',
+  '#EXTINF:-1,Never Scanned',
+  '../Gate Album/missing.wav',
+  '#EXTINF:6,Nested',
+  '../Gate Album/Bonus/04 Nested.wav',
+  '#EXTINF:6,Third',
+  '../Gate Album/03 Third.wav',
+  '',
+].join('\n');
+
+/** Read a file out of the OPFS folder, or null when it is not there. */
+async function readFile(root, path) {
+  const segments = path.split('/');
+  const name = segments.pop();
+  try {
+    let directory = root;
+    for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+    return await (await (await directory.getFileHandle(name)).getFile()).text();
+  } catch {
+    return null;
+  }
 }
 
 async function run() {
@@ -197,8 +240,18 @@ async function run() {
   search.dispatchEvent(new app.Event('input'));
   await waitFor(() => rows().length === written.length, 'Clearing the search did not restore the list.');
 
+  // 8. Editing a playlist must not delete anything from the user's file.
+  //
+  // Every edit rewrites the whole file. The write path used to keep only the
+  // entries that matched the index, so a single click erased the remote
+  // stream and the not-yet-scanned file from disk. The row buttons also
+  // carried their position in the *rendered* list, so with a search active
+  // they acted on a different track than the one clicked.
+  const playlistReport = await editPlaylist(app, doc, harness, root, rows, waitFor);
+
   harness.pause();
   return {
+    ...playlistReport,
     indexed: harness.libraryTracks(),
     nested: true,
     viewWhilePlaying: harness.view(),
@@ -206,6 +259,78 @@ async function run() {
     spectrumPeak: peak,
     coldVolume: Number(doc.querySelector('#volume').value),
   };
+}
+
+async function editPlaylist(app, doc, harness, root, rows, waitFor) {
+  const select = doc.querySelector('#lib-playlist');
+  assert([...select.options].some(option => option.value === PLAYLIST_PATH),
+    `The scan did not pick up ${PLAYLIST_PATH}.`);
+
+  const before = harness.playlistEntries(PLAYLIST_PATH);
+  assert(before?.length === 5, `The playlist parsed to ${before?.length} entries, expected 5.`);
+  assert(before.filter(entry => entry.path === null).length === 1,
+    'The remote entry should be the only unresolvable one.');
+
+  select.value = PLAYLIST_PATH;
+  select.dispatchEvent(new app.Event('change'));
+  // Three of the five entries name a file the index actually has.
+  await waitFor(() => rows().length === 3, () => `The playlist listed ${rows().length} rows, expected 3.`);
+
+  // Narrow to one row that is *not* the first, then remove it. With the old
+  // ordinal the handler would remove the playlist's first playable track.
+  const search = doc.querySelector('#lib-search');
+  search.value = 'Third';
+  search.dispatchEvent(new app.Event('input'));
+  await waitFor(() => rows().length === 1, () => `Search matched ${rows().length} rows, expected 1.`);
+  doc.querySelector('.row-tools button[data-action="remove"]').click();
+
+  await waitFor(async () => (await readFile(root, PLAYLIST_PATH))?.includes('03 Third.wav') === false,
+    async () => 'Removing the searched row did not rewrite the file without that track. '
+      + JSON.stringify({ scanLine: doc.querySelector('#lib-scan').textContent.trim(),
+          file: await readFile(root, PLAYLIST_PATH) }), 20_000);
+  const afterRemove = await readFile(root, PLAYLIST_PATH);
+
+  assert(afterRemove.includes('01 First.wav'),
+    `The remove acted on the wrong row — the first track is gone:\n${afterRemove}`);
+  assert(afterRemove.includes('https://example.invalid/stream.aac'),
+    `The remote entry was deleted from the file:\n${afterRemove}`);
+  assert(afterRemove.includes('missing.wav'),
+    `The unscanned entry was deleted from the file:\n${afterRemove}`);
+  assert(afterRemove.includes('../Gate Album/'),
+    `Tracks outside the playlist directory lost their climb:\n${afterRemove}`);
+
+  search.value = '';
+  search.dispatchEvent(new app.Event('input'));
+
+  // A rename whose sanitised file name is unchanged must not delete the file.
+  // `Mix` and `Mix ` both produce `Mix.m3u8`; writing then deleting removed
+  // what had just been written.
+  const prompted = [];
+  app.prompt = message => { prompted.push(message); return prompted.length === 1 ? 'Gate Mix ' : 'Café Mix'; };
+  app.confirm = () => true;
+
+  doc.querySelector('#lib-rename').click();
+  await waitFor(async () => (await readFile(root, PLAYLIST_PATH)) !== afterRemove,
+    'The same-name rename did not rewrite the file.', 20_000);
+  assert(await readFile(root, PLAYLIST_PATH) !== null,
+    'A rename that changed no file name deleted the playlist.');
+
+  // A rename that does change the file name moves it, and moves everything.
+  select.value = PLAYLIST_PATH;
+  select.dispatchEvent(new app.Event('change'));
+  await waitFor(() => rows().length === 2, () => `Expected 2 rows before the rename, saw ${rows().length}.`);
+  doc.querySelector('#lib-rename').click();
+
+  const renamedPath = 'Lists/Café Mix.m3u8';
+  const renamed = await waitFor(async () => await readFile(root, renamedPath),
+    'The rename did not produce the new file.', 20_000);
+  assert(await readFile(root, PLAYLIST_PATH) === null, 'The old playlist file was left behind.');
+  for (const needle of ['https://example.invalid/stream.aac', 'missing.wav', '01 First.wav', '04 Nested.wav']) {
+    assert(renamed.includes(needle), `The rename lost ${needle}:\n${renamed}`);
+  }
+  assert(renamed.includes('#PLAYLIST:Café Mix'), `The renamed playlist kept the old name:\n${renamed}`);
+
+  return { playlistEntriesKept: renamed.split('\n').filter(line => line && !line.startsWith('#')).length };
 }
 
 run().then(report => {

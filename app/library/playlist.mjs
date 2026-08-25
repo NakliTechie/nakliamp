@@ -233,19 +233,67 @@ export function parsePlaylist(text, path = '') {
 }
 
 /**
- * Serialise tracks as M3U8, with paths relative to `base`.
+ * A file name that survives the filesystem and still reads as what was typed.
+ *
+ * The previous `[^\w \-.]` was ASCII-only, so `Café`, `日本のミックス` and `Кайф`
+ * all collapsed to runs of `_` and overwrote each other. Only the
+ * characters a filesystem actually rejects are replaced. Leading dots go
+ * because they hide the file and because `.` and `..` are not names.
+ */
+export function safePlaylistFileName(name) {
+  const cleaned = String(name ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '')
+    .replace(/\.+$/, '')
+    .trim();
+  return cleaned || 'playlist';
+}
+
+/**
+ * Express `path` relative to the directory `base`, climbing with `..` when it
+ * has to.
+ *
+ * A playlist's entries are relative to the playlist's own directory, so a track
+ * outside that directory can only be named by climbing out of it. Writing the
+ * folder-relative path unchanged instead — which is what this did — makes
+ * `Rock/song.mp3` in `Playlists/mix.m3u8` re-read as `Playlists/Rock/song.mp3`,
+ * so every track outside the playlist's directory is lost on the next read.
+ */
+export function relativeTo(base, path) {
+  const from = String(base ?? '').replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  const to = String(path ?? '').split('/').filter(Boolean);
+  let shared = 0;
+  // `to.length - 1` because the last segment is the file name, never a directory.
+  while (shared < from.length && shared < to.length - 1 && from[shared] === to[shared]) shared += 1;
+  return [...Array.from({ length: from.length - shared }, () => '..'), ...to.slice(shared)].join('/');
+}
+
+/**
+ * Serialise playlist items as M3U8, with paths relative to `base`.
+ *
+ * An item is either a **track** from the index — which has a `path` and no
+ * `target` — or a **parsed entry** read from an existing playlist, which has
+ * both, or has only a `target` when nothing in the granted folder could resolve
+ * it. Entries keep their original text verbatim. That is what lets a remote
+ * stream, a not-yet-scanned file, and anything else this folder cannot resolve
+ * survive an edit: the alternative, writing back only the entries that matched
+ * the index, deletes the rest from the user's file.
+ *
  * Byte-stable for the same input, so an export and a re-import round-trip.
  */
-export function toM3u8(tracks, { name = null, base = '' } = {}) {
-  const prefix = base ? `${base.replace(/\/+$/, '')}/` : '';
+export function toM3u8(items, { name = null, base = '' } = {}) {
+  const directory = String(base ?? '').replace(/\/+$/, '');
   const lines = ['#EXTM3U'];
   if (name) lines.push(`#PLAYLIST:${name}`);
-  for (const track of tracks) {
-    const duration = Number.isFinite(track.durationS) && track.durationS > 0 ? Math.round(track.durationS) : -1;
-    const label = [track.artist, track.title || track.name].filter(Boolean).join(' - ');
+  for (const item of items) {
+    const duration = Number.isFinite(item.durationS) && item.durationS > 0 ? Math.round(item.durationS) : -1;
+    const label = [item.artist, item.title || item.name].filter(Boolean).join(' - ');
     lines.push(`#EXTINF:${duration},${label}`);
-    const path = String(track.path ?? '');
-    lines.push(path.startsWith(prefix) && prefix ? path.slice(prefix.length) : path);
+    lines.push(typeof item.target === 'string' && item.target
+      ? item.target
+      : relativeTo(directory, String(item.path ?? '')));
   }
   return `${lines.join('\n')}\n`;
 }

@@ -2,7 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePlaylist, resolveEntry, toM3u8, isPlaylistPath } from '../app/library/playlist.mjs';
+import { parsePlaylist, resolveEntry, toM3u8, isPlaylistPath, safePlaylistFileName } from '../app/library/playlist.mjs';
 
 // ------------------------------------------------------- resolution ----
 
@@ -263,9 +263,94 @@ test('a rewritten playlist survives repeated round-trips unchanged', () => {
   }
 });
 
-test('a playlist name is made safe for a file name', () => {
-  const unsafe = 'My/List: 2024 <best>';
-  const safe = unsafe.replace(/[^\w \-.]/g, '_').trim();
-  assert.ok(!safe.includes('/'), 'a slash would write outside the intended directory');
-  assert.ok(!safe.includes(':'), 'a colon is not portable');
+test('a playlist name is made safe without erasing the alphabet it is in', () => {
+  // The old `[^\w \-.]` sanitiser was ASCII-only, so every non-Latin name
+  // collapsed to the same run of underscores and they overwrote each other.
+  for (const name of ['Café', '日本のミックス', 'Кайф', 'Ελληνικά']) {
+    assert.equal(safePlaylistFileName(name), name, `${name} was mangled`);
+  }
+  for (const [name, expected] of [
+    ['My/List: 2024 <best>', 'My_List_ 2024 _best_'],
+    ['..', 'playlist'], ['.', 'playlist'], ['.hidden', 'hidden'],
+    ['   ', 'playlist'], ['', 'playlist'], ['trailing.', 'trailing'],
+  ]) {
+    assert.equal(safePlaylistFileName(name), expected, `${JSON.stringify(name)} sanitised wrongly`);
+  }
+  for (const name of ['a/b', 'a\\b', 'a:b', 'a*b', 'a?b', 'a"b', 'a<b', 'a>b', 'a|b']) {
+    const safe = safePlaylistFileName(name);
+    assert.ok(!/[\\/:*?"<>|]/.test(safe), `${name} left a path or reserved character in ${safe}`);
+  }
+});
+
+test('a track outside the playlist directory is written so it reads back', () => {
+  // `Rock/song.mp3` written unchanged into `Playlists/mix.m3u8` re-read as
+  // `Playlists/Rock/song.mp3`. Every track outside the playlist's own folder
+  // was lost on the next read, which is what made a rewrite destructive.
+  const tracks = [
+    track({ path: 'Rock/song.mp3', title: 'Out' }),
+    track({ path: 'Playlists/near.mp3', title: 'In' }),
+    track({ path: 'Playlists/deep/further.mp3', title: 'Deeper' }),
+    track({ path: 'top.mp3', title: 'Root' }),
+  ];
+  const text = toM3u8(tracks, { name: 'Mix', base: 'Playlists' });
+  assert.ok(text.includes('../Rock/song.mp3'), `no climb was emitted:\n${text}`);
+  const parsed = parsePlaylist(text, 'Playlists/Mix.m3u8');
+  assert.deepEqual(
+    parsed.entries.map(entry => entry.path),
+    ['Rock/song.mp3', 'Playlists/near.mp3', 'Playlists/deep/further.mp3', 'top.mp3'],
+  );
+  assert.equal(parsed.unresolved, 0);
+});
+
+test('an entry the folder cannot resolve is written back verbatim', () => {
+  // The write path used to keep only the entries that matched the index, so
+  // every edit deleted the rest from the user's file.
+  const source = [
+    '#EXTM3U',
+    '#PLAYLIST:Mix',
+    '#EXTINF:-1,Radio Paradise',
+    'https://stream.radioparadise.com/aac-320',
+    '#EXTINF:120,Local - Known',
+    'known.mp3',
+    '#EXTINF:-1,Not scanned yet',
+    'unscanned.flac',
+    '#EXTINF:-1,Outside',
+    '../../elsewhere.mp3',
+    '',
+  ].join('\n');
+  const before = parsePlaylist(source, 'Playlists/Mix.m3u8');
+  assert.equal(before.entries.length, 4);
+  assert.equal(before.unresolved, 2, 'the remote stream and the climb must not resolve');
+
+  const rewritten = toM3u8(before.entries, { name: 'Mix', base: 'Playlists' });
+  assert.equal(rewritten, source, 'a no-op rewrite changed the file');
+});
+
+test('a reorder, a removal and a rename all keep every entry', () => {
+  const source = [
+    '#EXTM3U', '#PLAYLIST:Mix',
+    '#EXTINF:-1,Radio Paradise', 'https://stream.radioparadise.com/aac-320',
+    '#EXTINF:120,Local - One', 'one.mp3',
+    '#EXTINF:-1,Not scanned yet', 'unscanned.flac',
+    '#EXTINF:200,Local - Two', '../Rock/two.mp3',
+    '',
+  ].join('\n');
+  const before = parsePlaylist(source, 'Playlists/Mix.m3u8');
+  const targets = before.entries.map(entry => entry.target);
+
+  // Reorder: swap the two entries the index can play, entries 1 and 3.
+  const reordered = [...before.entries];
+  [reordered[1], reordered[3]] = [reordered[3], reordered[1]];
+  const afterMove = parsePlaylist(toM3u8(reordered, { name: 'Mix', base: 'Playlists' }), 'Playlists/Mix.m3u8');
+  assert.deepEqual(afterMove.entries.map(entry => entry.target), [targets[0], targets[3], targets[2], targets[1]]);
+  assert.equal(afterMove.unresolved, 1, 'the remote stream was dropped by a reorder');
+
+  // Removal: exactly one entry goes.
+  const removed = before.entries.filter((_, index) => index !== 1);
+  const afterRemove = parsePlaylist(toM3u8(removed, { name: 'Mix', base: 'Playlists' }), 'Playlists/Mix.m3u8');
+  assert.deepEqual(afterRemove.entries.map(entry => entry.target), [targets[0], targets[2], targets[3]]);
+
+  // Rename: the name line changes and nothing else does.
+  const renamed = toM3u8(before.entries, { name: 'Café Mix', base: 'Playlists' });
+  assert.equal(renamed, source.replace('#PLAYLIST:Mix', '#PLAYLIST:Café Mix'));
 });

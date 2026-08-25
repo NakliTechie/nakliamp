@@ -276,7 +276,7 @@ import { createVisualiser } from './app/visualiser/driver.mjs';
 import { allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary } from './app/library/store.mjs';
 import { searchTracks } from './app/library/search.mjs';
 import { allPlaylists } from './app/library/store.mjs';
-import { toM3u8 } from './app/library/playlist.mjs';
+import { toM3u8, safePlaylistFileName } from './app/library/playlist.mjs';
 import {
   supportsFolderGrant, requestFolder, storedFolder, storedFolderName, grantState,
   reclaimFolder, forgetFolder, startScan, adoptFolder, directoryFromDrop, persistStorage,
@@ -735,7 +735,9 @@ async function renderLibrary() {
         const button = document.createElement('button');
         button.type = 'button';
         button.dataset.action = action;
-        button.dataset.index = String(index);
+        // The entry this row came from, not its position in the rendered list:
+        // a search filters the rows, so an ordinal here acts on the wrong track.
+        button.dataset.entry = String(track.entryIndex);
         button.title = title;
         button.textContent = label;
         tools.append(button);
@@ -760,8 +762,32 @@ function reportScan(message) {
   line.textContent = message || '';
 }
 
-async function runScan(handle) {
-  if (scanning) return;
+/**
+ * Scans are serialised, and a request made while one runs is queued rather
+ * than dropped.
+ *
+ * Every playlist edit ends in a rescan. Dropping one leaves `playlistRows`
+ * describing a file that has already changed on disk, and the next edit then
+ * writes that stale list back over the newer file.
+ *
+ * One waiting scan is enough however many requests arrive: a scan reads the
+ * folder as it stands when it starts, so a second queued run would see exactly
+ * what the first already will.
+ */
+let scanChain = Promise.resolve();
+let scansWaiting = 0;
+
+function runScan(handle) {
+  if (scansWaiting > 0) return scanChain;
+  if (scanning) scansWaiting += 1;
+  scanChain = scanChain.then(async () => {
+    if (scansWaiting > 0) scansWaiting -= 1;
+    await performScan(handle);
+  });
+  return scanChain;
+}
+
+async function performScan(handle) {
   reportScan('Scanning your folder...');
   try {
     scanning = startScan(handle, {
@@ -933,20 +959,69 @@ let activePlaylist = null;
 
 /**
  * Resolve a playlist's entries against the index, keeping playlist order.
- * An entry naming a file the index does not have is reported rather than
- * silently dropped: a playlist that half-loads without saying so is worse
- * than one that refuses.
+ *
+ * **The parsed entry is the unit, not the matched track.** Every edit writes
+ * this playlist back over the user's file, so anything dropped here is deleted
+ * from disk: remote streams, files not yet scanned, and anything the index has
+ * not caught up with. Each entry is returned whether or not it matched, and the
+ * ones that did not are carried through the write verbatim.
+ *
+ * `found` holds the playable tracks in playlist order, each a shallow copy
+ * carrying the index of the entry it came from — a copy because the same track
+ * may legitimately appear twice in one playlist, and the row has to know which
+ * of the two it is.
  */
 function tracksForPlaylist(playlist) {
   const byPath = new Map(libraryTracks.map(track => [track.path, track]));
   const found = [];
   let missing = 0;
-  for (const entry of playlist.entries) {
+  for (const [entryIndex, entry] of playlist.entries.entries()) {
     const track = entry.path ? byPath.get(entry.path) : null;
-    if (track) found.push(track);
+    if (track) found.push({ ...track, entryIndex });
     else missing += 1;
   }
   return { found, missing };
+}
+
+/**
+ * The lines to write for `playlist` after applying `entries`.
+ * An entry keeps its own EXTINF where it has one and borrows the index's
+ * metadata where it does not, so a playlist written without durations gains
+ * them rather than losing what it had.
+ */
+function playlistLines(entries) {
+  const byPath = new Map(libraryTracks.map(track => [track.path, track]));
+  return entries.map(entry => {
+    const track = entry.path ? byPath.get(entry.path) : null;
+    return {
+      target: entry.target,
+      path: entry.path,
+      durationS: entry.durationS ?? track?.durationS ?? null,
+      artist: entry.artist ?? track?.artist ?? null,
+      title: entry.title ?? track?.title ?? track?.name ?? null,
+    };
+  });
+}
+
+/** Walk to the directory holding `path`, creating nothing. */
+async function directoryFor(handle, segments) {
+  let directory = handle;
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  return directory;
+}
+
+/** True when a file already sits at `path`. Writing over one is a deletion. */
+async function playlistFileExists(path) {
+  const handle = await storedFolder();
+  if (!handle) return false;
+  const segments = path.split('/');
+  const fileName = segments.pop();
+  try {
+    await (await directoryFor(handle, segments)).getFileHandle(fileName);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function saveQueueAsPlaylist() {
@@ -961,7 +1036,10 @@ async function saveQueueAsPlaylist() {
     return;
   }
 
-  const fileName = `${name.replace(/[^\w \-.]/g, '_').trim() || 'playlist'}.m3u8`;
+  const fileName = `${safePlaylistFileName(name)}.m3u8`;
+  // Saving over an existing playlist destroys it. Ask first.
+  if (await playlistFileExists(fileName)
+    && !confirm(`${fileName} already exists in your music folder. Replace it?`)) return;
   try {
     const file = await handle.getFileHandle(fileName, { create: true });
     const writable = await file.createWritable();
@@ -1001,8 +1079,7 @@ async function writePlaylistFile(path, tracks, name) {
   }
   const segments = path.split('/');
   const fileName = segments.pop();
-  let directory = handle;
-  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+  const directory = await directoryFor(handle, segments);
   const file = await directory.getFileHandle(fileName, { create: true });
   const writable = await file.createWritable();
   await writable.write(toM3u8(tracks, { name, base: segments.join('/') }));
@@ -1010,29 +1087,32 @@ async function writePlaylistFile(path, tracks, name) {
   return handle;
 }
 
-async function removeFromPlaylist(index) {
+async function removeFromPlaylist(entryIndex) {
   const playlist = playlistRows.find(row => row.path === activePlaylist);
-  if (!playlist) return;
-  const { found } = tracksForPlaylist(playlist);
-  const next = found.filter((_, position) => position !== index);
+  if (!playlist || !playlist.entries[entryIndex]) return;
+  const next = playlist.entries.filter((_, position) => position !== entryIndex);
   await persistPlaylist(playlist, next, `Removed 1 track from ${playlist.name}.`);
 }
 
-async function movePlaylistTrack(index, step) {
+async function movePlaylistTrack(entryIndex, step) {
   const playlist = playlistRows.find(row => row.path === activePlaylist);
-  if (!playlist) return;
-  const { found } = tracksForPlaylist(playlist);
-  const target = index + step;
-  if (target < 0 || target >= found.length) return;
-  const next = [...found];
-  [next[index], next[target]] = [next[target], next[index]];
+  if (!playlist || !playlist.entries[entryIndex]) return;
+  // Move past the neighbouring *visible* row, not the neighbouring entry.
+  // Unresolved entries sit between the rows on screen; swapping with one of
+  // those would look like the button did nothing.
+  const visible = tracksForPlaylist(playlist).found.map(track => track.entryIndex);
+  const position = visible.indexOf(entryIndex);
+  const target = visible[position + step];
+  if (position < 0 || target === undefined) return;
+  const next = [...playlist.entries];
+  [next[entryIndex], next[target]] = [next[target], next[entryIndex]];
   await persistPlaylist(playlist, next, null);
 }
 
 /** Write the playlist back to disk, then rescan so the index matches the file. */
-async function persistPlaylist(playlist, tracks, message) {
+async function persistPlaylist(playlist, entries, message) {
   try {
-    const handle = await writePlaylistFile(playlist.path, tracks, playlist.name);
+    const handle = await writePlaylistFile(playlist.path, playlistLines(entries), playlist.name);
     if (message) reportScan(message);
     await runScan(handle);
   } catch (error) {
@@ -1047,12 +1127,19 @@ async function renamePlaylist() {
   if (!name || name === playlist.name) return;
 
   const directory = playlist.path.split('/').slice(0, -1).join('/');
-  const safe = name.replace(/[^\w \-.]/g, '_').trim() || 'playlist';
+  const safe = safePlaylistFileName(name);
   const nextPath = `${directory ? `${directory}/` : ''}${safe}.m3u8`;
-  const { found } = tracksForPlaylist(playlist);
+  const lines = playlistLines(playlist.entries);
+  // Two different display names can sanitise to one file name — `Mix` and
+  // `Mix ` among them. Writing then deleting in that case deletes what was
+  // just written, so the rename is a rewrite in place whenever the path is
+  // unchanged, and the delete only runs when the paths genuinely differ.
+  const renamingFile = nextPath !== playlist.path;
+  if (renamingFile && await playlistFileExists(nextPath)
+    && !confirm(`${nextPath} already exists. Replace it?`)) return;
   try {
-    await writePlaylistFile(nextPath, found, name);
-    await deletePlaylistFile(playlist.path);
+    await writePlaylistFile(nextPath, lines, name);
+    if (renamingFile) await deletePlaylistFile(playlist.path);
     activePlaylist = nextPath;
     reportScan(`Renamed to ${safe}.m3u8.`);
     const handle = await storedFolder();
@@ -1067,9 +1154,7 @@ async function deletePlaylistFile(path) {
   if (!handle) throw new Error('Open your music folder first.');
   const segments = path.split('/');
   const fileName = segments.pop();
-  let directory = handle;
-  for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
-  await directory.removeEntry(fileName);
+  await (await directoryFor(handle, segments)).removeEntry(fileName);
 }
 
 async function deleteActivePlaylist() {
@@ -1095,9 +1180,9 @@ $('#lib-list').addEventListener('click', event => {
   const tool = event.target.closest('.row-tools button');
   if (tool) {
     event.stopPropagation();
-    const index = Number(tool.dataset.index);
-    if (tool.dataset.action === 'remove') removeFromPlaylist(index);
-    else movePlaylistTrack(index, tool.dataset.action === 'up' ? -1 : 1);
+    const entryIndex = Number(tool.dataset.entry);
+    if (tool.dataset.action === 'remove') removeFromPlaylist(entryIndex);
+    else movePlaylistTrack(entryIndex, tool.dataset.action === 'up' ? -1 : 1);
     return;
   }
   const row = event.target.closest('.lib-row');
@@ -1130,6 +1215,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     queue: () => ({ length: queue.length, index: queueIndex }),
     libraryTracks: () => libraryTracks.length,
     playlists: () => playlistRows.length,
+    playlistEntries: path => playlistRows.find(row => row.path === path)?.entries.map(entry => ({ ...entry })) ?? null,
     visualiser: () => ({ mode: visualiser.mode(), running: visualiser.running, modes: visualiser.modes().length }),
     // Diagnostic seam: the peak the engine's own analyser reports right now.
     // Distinguishes "the visualiser is broken" from "there is no signal".
