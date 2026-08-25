@@ -8,6 +8,11 @@ const expected = Object.freeze({
   'engine/reel-engine.mjs': '791a691fd8d0d95c9cf7fd27adf3bad2469c918f15e30ed9e57f05d0dad4c175',
   'vendor/mediabunny/mediabunny-1.51.0.min.mjs': '1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b',
   'vendor/mediabunny/LICENSE-MPL-2.0.txt': '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04',
+  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm': '78c9428535ab762fc928cd5126df402639f9e647e7777d649879ed9e29bf7bab',
+  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs': 'e5e97e424b6bc20549e82844ff82ff33ab15e8e2c3accb6f21ed913404c769aa',
+  'vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs': '2a47ff87a4c25022c39bc6bf077e0400af5bdef7aa341e442537a9864c3709be',
+  'vendor/libav/LICENSE-LGPL-2.1.txt': '20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95',
+  'vendor/libav/LICENSE-LGPL-NOTICE.md': 'afb8d248e345d343a45f74a5666f850d1920fb5a0006621a5a45e570687933bf',
 });
 
 for (const [path, digest] of Object.entries(expected)) {
@@ -30,5 +35,12 @@ if (!vendor.includes('292b0916d7f139f6f27fe14661772a7dee43da7d')) {
 if (!vendor.includes('corresponding-source notice') && !vendor.includes('Corresponding Mediabunny source')) {
   throw new Error('VENDOR.md omits Mediabunny source availability.');
 }
+// LGPL-2.1 obliges the library to stay replaceable and its source locatable.
+if (!vendor.includes('github.com/Yahweasel/libav.js')) {
+  throw new Error('VENDOR.md omits the libav.js corresponding-source location.');
+}
+if (!vendor.includes('--enable-gpl')) {
+  throw new Error('VENDOR.md omits the GPL-build prohibition for libav.js.');
+}
 
-console.log('PASS — Vendor pin: Reel 292b091; three files match SHA-256');
+console.log(`PASS — Vendor pin: Reel 292b091; ${Object.keys(expected).length} files match SHA-256`);
