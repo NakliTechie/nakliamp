@@ -227,18 +227,79 @@ async function run() {
   await waitFor(() => harness.state().media.name === second, 'Could not move on to check resume.');
   doc.querySelector('#prev').click();
   await waitFor(() => harness.state().media.name === first, 'Could not return to check resume.');
-  await waitFor(() => harness.state().clock.positionS > 0.5,
-    'Returning to a track restarted it instead of resuming.');
+  // Bounded on purpose. Given long enough, a track restarted from zero passes
+  // any position threshold, so an open-ended wait here proved nothing.
+  await waitFor(() => harness.state().clock.positionS > 0.9,
+    () => `Returning to a track restarted it: it is at ${harness.state().clock.positionS}.`, 700);
 
-  // 7. Search narrows the list without losing playback.
+  // 6b. And when the switch is a click in the list rather than Next.
+  //     Only auto-advance used to record the outgoing position, so clicking
+  //     straight from one track to another lost where the first one was.
+  await harness.play();
+  // Well past anything an earlier step stored, so a stale resume position
+  // cannot pass for a fresh one.
+  await waitFor(() => harness.state().clock.positionS > 3.0, 'The clock did not advance before the click check.', 20_000);
+  const leftAt = harness.state().clock.positionS;
+  rows()[1].click();
+  await waitFor(() => harness.state().media.name === second, 'Clicking the second row did not switch track.');
+  rows()[0].click();
+  await waitFor(() => harness.state().media.name === first, 'Clicking the first row did not switch back.');
+  // A short window on purpose: a track restarted from zero cannot reach this
+  // position within it, so only a real resume can satisfy the wait. Given long
+  // enough, ordinary playback would satisfy any threshold and prove nothing.
+  await waitFor(() => harness.state().clock.positionS > leftAt - 0.6,
+    () => `Clicking away lost the position: resumed at ${harness.state().clock.positionS}, left at ${leftAt}.`,
+    900);
+  harness.pause();
+
+  // 7. Search narrows the list without losing playback — and without the
+  //    queue index drifting onto a different track. `queue` is reassigned to
+  //    the visible rows on every keystroke while the index kept pointing into
+  //    the old array, so prev/next, the now-playing marker and auto-advance
+  //    all acted on whatever happened to sit at that position.
+  const playingName = harness.state().media.name;
   const search = doc.querySelector('#lib-search');
   search.value = 'Nested';
   search.dispatchEvent(new app.Event('input'));
-  await waitFor(() => rows().length === 1, `Search matched ${rows().length} rows, expected 1.`);
+  await waitFor(() => rows().length === 1, () => `Search matched ${rows().length} rows, expected 1.`);
   assert(harness.state().path, 'Searching stopped playback.');
+  assert(harness.queue().index === -1,
+    `The playing track is filtered out, but the queue index is ${harness.queue().index}.`);
+  assert(doc.querySelector('.lib-row[aria-current]') === null,
+    'A row that is not the playing track is marked as playing.');
+  // The transport buttons are refreshed on the clock frame, not on the keystroke.
+  await waitFor(() => doc.querySelector('#next').disabled && doc.querySelector('#prev').disabled,
+    'Next and previous act on a queue the playing track is not in.');
+
   search.value = '';
   search.dispatchEvent(new app.Event('input'));
   await waitFor(() => rows().length === written.length, 'Clearing the search did not restore the list.');
+  assert(harness.state().media.name === playingName, 'Searching changed the playing track.');
+  const marked = doc.querySelector('.lib-row[aria-current] b')?.textContent ?? null;
+  assert(marked && playingName.includes(marked.replace(/\.wav$/, '')),
+    `The now-playing marker is on ${marked} while ${playingName} plays.`);
+
+  // 7b. The last track of a queue must stop writing when it ends.
+  //
+  // `advancing` prevented two advances overlapping, not the same one
+  // repeating: `advance` awaited an IndexedDB write before discovering there
+  // was no next track, so a finished last track wrote to the database on every
+  // animation frame for as long as the tab stayed open.
+  rows().at(-1).click();
+  await waitFor(() => harness.state().clock.playing && harness.state().media.duration > 4,
+    'The last track did not start.');
+  await waitFor(() => harness.queue().index === harness.queue().length - 1,
+    () => `Expected to be on the last track, index is ${harness.queue().index}.`);
+  await harness.seek(harness.state().media.duration - 0.3);
+  await waitFor(() => harness.state().clock.positionS >= harness.state().media.duration - 0.05,
+    () => `The last track did not reach its end (at ${harness.state().clock.positionS}).`);
+
+  const writesAtEnd = harness.positionWrites();
+  await new Promise(resolve => setTimeout(resolve, 900));
+  const writesLater = harness.positionWrites();
+  assert(writesLater - writesAtEnd <= 1,
+    `A finished last track wrote its position ${writesLater - writesAtEnd} times in 900ms.`);
+  assert(!harness.visualiser().running, 'The visualiser kept painting after the track ended.');
 
   // 8. Editing a playlist must not delete anything from the user's file.
   //

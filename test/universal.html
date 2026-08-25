@@ -220,6 +220,43 @@ async function run() {
     report.undecodableCode = failure.code;
   }
 
+  // 9. R3 must give its AudioContext back.
+  //
+  // An AudioContext holds a live audio thread and, through its buffer, the
+  // whole decoded track — about 105 MB for a five-minute 44.1 kHz stereo AIFF.
+  // Only the BufferSource used to be stopped, so every load left the previous
+  // context open with its buffer reachable. Browsers cap how many contexts a
+  // page may hold, so this ends in silence, not just in memory.
+  {
+    const opened = [];
+    const engine = createNakliAmpEngine({
+      version: 'gate',
+      softwareDecoders: SOFTWARE_DECODERS,
+      audioContextFactory: () => {
+        const context = new AudioContext();
+        opened.push(context);
+        return context;
+      },
+    });
+    const file = await fixture('audio-pcm.aiff');
+    for (let round = 0; round < 6; round += 1) {
+      await engine.load(file);
+      await engine.play();
+      engine.pause();
+    }
+    const closedDuringPlayback = opened.filter(context => context.state === 'closed').length;
+    assert(opened.length === 6, `Six loads opened ${opened.length} contexts.`);
+    assert(closedDuringPlayback === 5,
+      `${opened.length - closedDuringPlayback} of ${opened.length} contexts are still open after six loads.`);
+
+    engine.destroy();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const closed = opened.filter(context => context.state === 'closed').length;
+    assert(closed === opened.length,
+      `destroy() left ${opened.length - closed} audio context(s) open.`);
+    report.audioContexts = { opened: opened.length, closed };
+  }
+
   return report;
 }
 

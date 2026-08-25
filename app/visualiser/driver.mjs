@@ -34,6 +34,10 @@ export function createVisualiser({
   const context = canvas.getContext('2d');
   let mode = MODES[0];
   let frameId = 0;
+  // Which pool `frameId` belongs to. Animation frames and timeouts number
+  // independently, so cancelling one id in both pools can cancel an unrelated
+  // callback — including the page's own clock frame, which nothing reschedules.
+  let frameKind = null;
   let running = false;
   let memory = {};
   let freq = new Uint8Array(0);
@@ -54,6 +58,7 @@ export function createVisualiser({
 
   function frame() {
     frameId = 0;
+    frameKind = null;
     if (!running) return;
     try {
       const analyser = getAnalyser();
@@ -76,9 +81,15 @@ export function createVisualiser({
         width: canvas.width, height: canvas.height,
       });
     } catch (error) {
-      // A failing mode must not take the player with it.
-      onError(error);
+      // A failing mode must not take the player with it — and must not be left
+      // installed. `stop()` alone kept the throwing mode as the current one, so
+      // the caller's next `start()` ran it again: throw, report, stop, restart,
+      // once per frame for the life of the tab. The driver owns mode lifetime,
+      // so the driver is what falls back, before the caller is told.
+      mode = modeById('none');
+      memory = {};
       stop();
+      onError(error);
       return;
     }
     schedule();
@@ -88,9 +99,13 @@ export function createVisualiser({
     if (!running || frameId) return;
     // Reduced motion still shows the spectrum, just refreshed slowly enough not
     // to animate. Stopping entirely would remove information, not just motion.
-    frameId = reducedMotion()
-      ? setTimeout(() => { frameId = 0; frame(); }, 500)
-      : requestAnimationFrame(frame);
+    if (reducedMotion()) {
+      frameKind = 'timeout';
+      frameId = setTimeout(frame, 500);
+    } else {
+      frameKind = 'frame';
+      frameId = requestAnimationFrame(frame);
+    }
   }
 
   function start() {
@@ -102,9 +117,10 @@ export function createVisualiser({
   function stop() {
     running = false;
     if (frameId) {
-      cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
+      if (frameKind === 'timeout') clearTimeout(frameId);
+      else cancelAnimationFrame(frameId);
       frameId = 0;
+      frameKind = null;
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
   }

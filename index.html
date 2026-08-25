@@ -448,16 +448,39 @@ function renderClock() {
     $('#prev').disabled = queueIndex <= 0;
     $('#next').disabled = queueIndex < 0 || queueIndex >= queue.length - 1;
   }
-  if (state.path && state.clock.playing && !hasEnded(state) && !visualiser.running) visualiser.start();
-  if (state.path && queueIndex >= 0 && hasEnded(state)) {
-    if (!advancing) {
-      advancing = true;
-      advance(1).finally(() => { advancing = false; });
-    }
+  const idle = !state.path || !state.clock.playing || hasEnded(state);
+  if (!idle && !visualiser.running) visualiser.start();
+  // Nothing is moving, so nothing needs repainting. Left running, it repainted
+  // at 60 fps for the life of the tab whatever the player was doing.
+  if (idle && visualiser.running) visualiser.stop();
+
+  // Auto-advance fires once per track that ends, not once per frame after it.
+  //
+  // `advancing` prevented two advances overlapping, not the same advance
+  // repeating: `advance` awaits `rememberPosition()` — an IndexedDB write —
+  // before it discovers there is no next track, so the last track of a queue
+  // wrote to the database every animation frame, forever. The latch is the
+  // track's own id, so it clears by itself when a different track loads.
+  //
+  // `status` rather than `clock.playing`: the R3 rung reports `playing: false`
+  // the instant its buffer ends, so a clock test would stop auto-advance for
+  // every software-decoded track. `status` still says `playing` unless the
+  // person actually paused.
+  if (state.path && hasEnded(state) && state.status === 'playing'
+    && !advancing && endedTrackKey !== currentTrackKey()) {
+    endedTrackKey = currentTrackKey();
+    advancing = true;
+    advance(1).finally(() => { advancing = false; });
   }
   frameId = requestAnimationFrame(renderClock);
 }
 let advancing = false;
+let endedTrackKey = null;
+
+/** What the end-of-track latch is held against. */
+function currentTrackKey() {
+  return playingTrack?.id ?? engine.state().media.fingerprint ?? engine.state().media.name ?? null;
+}
 
 function showRefusal(error) {
   const code = error?.code || 'ERR_NAKLIAMP_UNKNOWN';
@@ -621,6 +644,14 @@ addEventListener('keydown', event => {
 let libraryTracks = [];
 let queue = [];
 let queueIndex = -1;
+/**
+ * The track the player is actually on, held as the record rather than as a
+ * position. `queue` is reassigned to the visible rows on every keystroke, so
+ * an index into it pointed at a different track the moment a search narrowed
+ * the list — which broke prev/next, the now-playing marker and auto-advance.
+ * `queueIndex` is derived from this after each render.
+ */
+let playingTrack = null;
 let scanning = null;
 const artUrls = new Map();
 
@@ -658,6 +689,8 @@ async function renderLibrary() {
     String(left.albumKey).localeCompare(String(right.albumKey)) || compareAlbumOrder(left, right));
 
   queue = visible;
+  // Derived, never carried across a render.
+  queueIndex = playingTrack ? queue.findIndex(track => track.id === playingTrack.id) : -1;
   const list = $('#lib-list');
   list.replaceChildren();
   $('#lib-count').textContent = query
@@ -682,7 +715,7 @@ async function renderLibrary() {
     return;
   }
 
-  const playingId = queue[queueIndex]?.id ?? null;
+  const playingId = playingTrack?.id ?? null;
   let heading = null;
   const fragment = document.createDocumentFragment();
 
@@ -853,12 +886,28 @@ async function playQueueAt(index) {
   const file = await fileFromPath(handle, track.path);
   if (!file) { reportScan(`${track.path} is no longer in the folder. Rescan to update the library.`); return; }
 
+  // Where the outgoing track stopped, before anything replaces it. Only
+  // auto-advance used to record this, so clicking straight to another track
+  // lost the position the library promises to remember.
+  await rememberPosition();
+
+  playingTrack = track;
   queueIndex = index;
-  await openMedia(file);
-  if (track.resumePositionS > 1 && track.durationS && track.resumePositionS < track.durationS - 2) {
+  endedTrackKey = null;
+  // `openMedia` returns null when a newer selection superseded this one.
+  // Seeking and counting a play on that basis credited whichever load won.
+  const opened = await openMedia(file);
+  if (!opened) return;
+  // The engine's duration, not the index's: the scanner leaves `durationS`
+  // null for any container it cannot measure cheaply, and requiring it meant
+  // those tracks silently never resumed at all. An unknown duration is a
+  // reason to trust the stored position, not to discard it.
+  const duration = engine.state().media.duration;
+  const nearTheEnd = Number.isFinite(duration) ? duration - 2 : Infinity;
+  if (track.resumePositionS > 1 && track.resumePositionS < nearTheEnd) {
     await engine.seek(track.resumePositionS);
   }
-  await updateTrackState(track.id, { playCount: track.playCount + 1, lastPlayedAt: Date.now() });
+  await patchTrack(track.id, { playCount: track.playCount + 1, lastPlayedAt: Date.now() });
   await renderLibrary();
 }
 
@@ -875,18 +924,40 @@ async function fileFromPath(rootHandle, path) {
   }
 }
 
+/**
+ * Update a track's mutable state on disk *and* in the loaded index.
+ *
+ * `libraryTracks` is only reloaded by a scan, so writing to IndexedDB alone
+ * left the objects the queue actually plays from holding whatever the last
+ * scan saw. Resuming a track within one session then used a position from
+ * before that session — the write was correct and the read was stale.
+ */
+async function patchTrack(id, patch) {
+  const local = libraryTracks.find(track => track.id === id);
+  if (local) Object.assign(local, patch);
+  await updateTrackState(id, patch);
+}
+
+// Counted so a gate can prove this is not being called once per frame.
+let positionWrites = 0;
+
 async function rememberPosition() {
-  const track = queue[queueIndex];
+  const track = playingTrack;
   if (!track) return;
   const position = engine.state().clock.positionS;
-  if (Number.isFinite(position)) await updateTrackState(track.id, { resumePositionS: position });
+  if (!Number.isFinite(position)) return;
+  positionWrites += 1;
+  await patchTrack(track.id, { resumePositionS: position });
 }
 
 async function advance(step) {
   if (queueIndex < 0) return;
-  await rememberPosition();
   const next = queueIndex + step;
-  if (next >= 0 && next < queue.length) await playQueueAt(next);
+  // `playQueueAt` records the outgoing position itself.
+  if (next >= 0 && next < queue.length) { await playQueueAt(next); return; }
+  // The end of the queue. There is nothing to move to, but where this track
+  // stopped is still worth keeping.
+  await rememberPosition();
 }
 
 
@@ -900,9 +971,11 @@ const visualiser = createVisualiser({
   getAnalyser: () => engine.analyser(),
   reducedMotion,
   onError: error => {
-    // A failing mode is not a reason to lose the player. Fall back to None and
-    // say so, rather than leaving a dead canvas.
-    $('#vis-mode').value = 'none';
+    // A failing mode is not a reason to lose the player. The driver has
+    // already fallen back to None; this reflects that on screen and remembers
+    // it, so the mode that threw is not restored on the next visit.
+    $('#vis-mode').value = visualiser.mode();
+    localStorage.setItem('nakliamp:visualiser', visualiser.mode());
     toast(`Visualiser stopped: ${error.message}`, 4000);
   },
 });
@@ -1196,12 +1269,16 @@ $('#lib-forget').addEventListener('click', async () => {
   await clearLibrary();
   queue = [];
   queueIndex = -1;
+  playingTrack = null;
   await refreshLibrary();
   reportScan(t('library.none'));
 });
 $('#open-folder').addEventListener('click', () => openLibrary({ prompt: true }));
 
 addEventListener('pagehide', () => { rememberPosition(); releaseArt(); });
+// `pagehide` does not fire when a tab is merely switched away from or the phone
+// is locked, which is most of how listening actually ends.
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') rememberPosition(); });
 
 if (new URLSearchParams(location.search).get('harness') === '1') {
   window.__nakliampHarness = Object.freeze({
@@ -1214,6 +1291,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     view: () => VIEWS.find(name => $(`#${name}`).classList.contains('on')) ?? null,
     queue: () => ({ length: queue.length, index: queueIndex }),
     libraryTracks: () => libraryTracks.length,
+    positionWrites: () => positionWrites,
     playlists: () => playlistRows.length,
     playlistEntries: path => playlistRows.find(row => row.path === path)?.entries.map(entry => ({ ...entry })) ?? null,
     visualiser: () => ({ mode: visualiser.mode(), running: visualiser.running, modes: visualiser.modes().length }),
@@ -1234,6 +1312,7 @@ if (new URLSearchParams(location.search).get('harness') === '1') {
     state: () => engine.state(),
     play: () => engine.play(),
     pause: () => engine.pause(),
+    seek: positionS => engine.seek(positionS),
   });
 }
 

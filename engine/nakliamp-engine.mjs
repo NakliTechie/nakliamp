@@ -359,11 +359,34 @@ export function createNakliAmpEngine({
     analyserOwner = null;
   }
 
-  function disposeSoftware() {
+  /**
+   * Stop the current BufferSource, keeping the graph.
+   * A BufferSource is single-use, so play, pause and seek all end one and
+   * build another against the same context, buffer and gain.
+   */
+  function stopSoftwareSource() {
     try { software?.source?.stop(); } catch (_) {}
     try { software?.source?.disconnect(); } catch (_) {}
-    try { software?.gain?.disconnect(); } catch (_) {}
     if (software) software.source = null;
+  }
+
+  /**
+   * Give the whole R3 graph back.
+   *
+   * An AudioContext holds a live audio thread and, through the buffer, the
+   * entire decoded track: a five-minute 44.1 kHz stereo AIFF is about 105 MB
+   * of Float32. Only the source used to be stopped, so every R3 load left the
+   * previous context open with its buffer still reachable, and twelve loads
+   * meant twelve live contexts. Browsers also cap how many a page may hold, so
+   * this eventually stops playback outright rather than merely wasting memory.
+   */
+  function releaseSoftware() {
+    stopSoftwareSource();
+    try { software?.gain?.disconnect(); } catch (_) {}
+    // `close()` is async and nothing waits for it: this is teardown, and a
+    // context that refuses to close is not a reason to fail the next load.
+    try { software?.context?.close?.()?.catch?.(() => {}); } catch (_) {}
+    software = null;
   }
 
   /**
@@ -439,8 +462,7 @@ export function createNakliAmpEngine({
       );
     }
     const track = selectAudioTrack(metadata);
-    disposeSoftware();
-    software = null;
+    releaseSoftware();
     if (hasVideoTrack(metadata)) {
       throw new NakliAmpError(
         'VideoMediaDeferredError',
@@ -523,8 +545,7 @@ export function createNakliAmpEngine({
       reel.pause();
       disposeNative();
       disposeAnalyser();
-      disposeSoftware();
-      software = null;
+      releaseSoftware();
       nativeAudio = candidateAudio;
       nativeUrl = candidateUrl;
       nativeMetadata = {
@@ -608,7 +629,7 @@ export function createNakliAmpEngine({
     reel.pause();
     disposeNative();
     disposeAnalyser();
-    disposeSoftware();
+    releaseSoftware();
     software = softwarePlayback(decoded, file.name, file.size, decoded.container);
     mode = 'r3';
     status = 'ready';
@@ -712,7 +733,7 @@ export function createNakliAmpEngine({
   async function play() {
     if (mode === 'r3' && software) {
       if (software.context.state === 'suspended') await software.context.resume();
-      disposeSoftware();
+      stopSoftwareSource();
       const source = software.context.createBufferSource();
       source.buffer = software.buffer;
       source.connect(software.gain);
@@ -732,7 +753,7 @@ export function createNakliAmpEngine({
     if (mode === 'r3' && software) {
       software.offsetS = softwarePosition();
       software.playing = false;
-      disposeSoftware();
+      stopSoftwareSource();
     }
     if (mode === 'r1') reel.pause();
     if (mode === 'r2') nativeAudio?.pause();
@@ -745,7 +766,7 @@ export function createNakliAmpEngine({
     const next = Math.max(0, Math.min(Number.isFinite(duration) ? duration : Infinity, Number(positionS) || 0));
     if (mode === 'r3' && software) {
       const wasPlaying = software.playing;
-      disposeSoftware();
+      stopSoftwareSource();
       software.offsetS = next;
       software.playing = false;
       if (wasPlaying) await play();
@@ -892,6 +913,10 @@ export function createNakliAmpEngine({
     latestLoadId += 1;
     reel.pause();
     disposeNative();
+    // The R3 graph and the spectrum tap outlive the element otherwise: a
+    // destroyed engine left a live audio thread and a decoded track behind.
+    disposeAnalyser();
+    releaseSoftware();
     mode = null;
     status = 'idle';
   }
