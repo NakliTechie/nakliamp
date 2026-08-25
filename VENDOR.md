@@ -50,13 +50,26 @@ Build it inside libav.js's own `emscripten/emsdk` Docker image. A local
 Homebrew emscripten 6.0.1 produces an **empty `libavutil.a`** and the link
 fails; the pinned toolchain is the supported path.
 
-**LGPL-2.1 obligations.** The library must stay replaceable. In the hosted and
-source builds the `.wasm` ships as its own file and can be swapped for another
-build of the same interface. The full licence text travels alongside it, and
-corresponding source is `https://github.com/Yahweasel/libav.js` at tag
-`v6.10.9.0` plus the configuration above, which reproduces this binary. Do not
-substitute a build configured with `--enable-gpl`: that would relicense
-NakliAmp itself.
+**LGPL-2.1 obligations.** The library must stay replaceable, so be precise
+about where it actually is:
+
+- **In this repository** the `.wasm` is its own file at
+  `vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm`, alongside its glue and the
+  full LGPL-2.1 text. Replacing it is a file copy plus a hash update in
+  `scripts/verify-vendor.mjs`.
+- **In `dist/nakliamp-full.html`** it is embedded as base64, because that
+  artifact's whole purpose is to be one file. Relinking is served by the
+  separate copy above plus the build recipe: the configuration given here and
+  the tagged upstream reproduce this exact binary, and rebuilding the artifact
+  with a replacement `.wasm` in `vendor/libav/` is a single command.
+- **The hosted build and the lean artifact do not contain it at all.** They
+  register only the in-house PCM decoder, so there is no library to replace.
+  An earlier version of this file claimed the hosted build shipped a swappable
+  `.wasm`; it never did.
+
+Corresponding source is `https://github.com/Yahweasel/libav.js` at tag
+`v6.10.9.0` plus the configuration above. Do not substitute a build configured
+with `--enable-gpl`: that would relicense NakliAmp itself.
 
 Corresponding Mediabunny source is available from the upstream release and
 package URLs recorded in Reel's `VENDOR.md` at the pinned commit. Recipients may

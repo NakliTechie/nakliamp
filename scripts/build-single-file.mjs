@@ -44,6 +44,20 @@ async function collect(path) {
 
 let html = await readFile(resolve(root, ENTRY_HTML), 'utf8');
 if (FULL) {
+  // WebAssembly.instantiate is governed by script-src. The lean build has no
+  // wasm and keeps the tighter policy; only the artifact that actually carries
+  // a decoder gets the allowance, and 'wasm-unsafe-eval' does not re-enable
+  // eval().
+  const before = html;
+  html = html.replace("script-src 'self' 'unsafe-inline' blob:",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:");
+  if (html === before) throw new Error('The full build could not widen script-src for wasm.');
+  // The embedded wasm is handed to libav as a blob URL, and fetching a blob is
+  // governed by connect-src. Still no remote origin: blob: is same-origin data
+  // this page created.
+  const widened = html.replace("connect-src 'self'", "connect-src 'self' blob:");
+  if (widened === html) throw new Error('The full build could not widen connect-src for the wasm blob.');
+  html = widened;
   html = html.replace(
     "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';",
     "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';\n"
@@ -104,10 +118,17 @@ function __nakliampModule(path) {
   __nakliampUrls.set(path, 'pending');
   const rewritten = source.replace(
     new RegExp(__nakliampSpecifier, 'g'),
-    (match, quote, specifier) => match.replace(
-      quote + specifier + quote,
-      quote + __nakliampModule(__nakliampResolve(path, specifier)) + quote,
-    ),
+    (match, quote, specifier) => {
+      // A specifier ending in '/' names a directory, not a module. The
+      // build-time collector skips these; the resolver must too, or it
+      // rewrites a directory URL into a lookup for a module that was never
+      // inlined, and the whole page dies on load.
+      if (specifier.endsWith('/')) return match;
+      return match.replace(
+        quote + specifier + quote,
+        quote + __nakliampModule(__nakliampResolve(path, specifier)) + quote,
+      );
+    },
   );
   const url = URL.createObjectURL(new Blob([rewritten], { type: 'text/javascript' }));
   __nakliampUrls.set(path, url);
@@ -129,6 +150,9 @@ if (FULL) {
   wasmPreload = `
 const __nakliampWasmBase64 = ${JSON.stringify(wasmBytes.toString('base64'))};
 window.__nakliampWasmBinary = Uint8Array.from(atob(__nakliampWasmBase64), c => c.charCodeAt(0));
+window.__nakliampWasmUrl = URL.createObjectURL(
+  new Blob([window.__nakliampWasmBinary], { type: 'application/wasm' }),
+);
 window.__nakliampLibavUrls = {
   loader: __nakliampModule('vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs'),
   factory: __nakliampModule('vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs'),

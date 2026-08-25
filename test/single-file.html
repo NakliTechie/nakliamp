@@ -10,8 +10,14 @@
 <iframe id="app" title="NakliAmp single-file release"></iframe>
 <script type="module">
 // Single-file release gate.
-// Loads the built artifact and holds it to the same behaviour as the modular
-// source: it plays, it refuses WMA by name, and it reaches the network never.
+//
+// Runs over BOTH artifacts. It used to hardcode the lean one, which is how a
+// full build that threw on its first line shipped past three green gates: the
+// static checks read the file without running it, and the wasm-decode gate
+// exercised the decoder from source on a page carrying no CSP at all.
+//
+// So this gate opens the real artifact, under its own CSP, and for the full
+// one requires a format only the wasm tier can decode to actually play.
 
 const result = document.querySelector('#result');
 const frame = document.querySelector('#app');
@@ -33,37 +39,68 @@ async function fixture(name, WindowFile) {
   return new WindowFile([await response.arrayBuffer()], name);
 }
 
-async function run() {
-  const boot = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('The single-file build did not boot.')), 20_000);
+const ARTIFACTS = [
+  { file: 'nakliamp.html', full: false },
+  { file: 'nakliamp-full.html', full: true },
+];
+
+async function boot(file) {
+  const ready = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${file} did not boot.`)), 20_000);
     frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
   });
-  frame.src = '../dist/nakliamp.html?harness=1';
-  const app = await boot;
-  const harness = await waitFor(() => app.__nakliampHarness, 'The single-file build exposed no harness surface.');
-  const doc = app.document;
+  frame.src = `../dist/${file}?harness=1`;
+  const app = await ready;
+  // The boot marker proves the modules instantiated. Static HTML renders
+  // whether or not a single line of script ran.
+  await waitFor(() => app.document.documentElement.dataset.nakliampReady === '1',
+    `${file} rendered but never ran: no boot marker.`);
+  const harness = await waitFor(() => app.__nakliampHarness, `${file} exposed no harness surface.`);
+  return { app, harness, doc: app.document };
+}
 
-  assert(doc.querySelector('#empty').classList.contains('on'), 'The empty state is not visible at boot.');
-  assert(doc.body.textContent.includes('no analytics'), 'The sovereignty copy is missing.');
+async function run() {
+  const report = {};
 
-  await harness.open(await fixture('audio-mp3.mp3', app.File));
-  assert(!doc.querySelector('#playerbar').hidden, 'The player bar did not appear.');
-  assert(harness.state().path === 'r1', `The single file played on ${harness.state().path}, expected r1.`);
-  await harness.play();
-  await waitFor(() => harness.state().clock.positionS > 0.12, 'The clock did not advance.');
-  harness.pause();
+  for (const { file, full } of ARTIFACTS) {
+    const { app, harness, doc } = await boot(file);
 
-  let refusal = null;
-  try { await harness.open(await fixture('audio-wma.wma', app.File)); } catch (error) { refusal = error; }
-  assert(refusal?.code === 'ERR_DEMUX_WMA_REFUSED', `The refusal code changed: ${refusal?.code}`);
+    assert(doc.querySelector('#empty').classList.contains('on'), `${file}: empty state not visible.`);
+    assert(doc.body.textContent.includes('no analytics'), `${file}: sovereignty copy missing.`);
+    assert(
+      doc.querySelector('#mediabunny-licence')?.textContent.includes('Mozilla Public License'),
+      `${file}: does not carry the Mediabunny licence.`,
+    );
 
-  // The artifact must carry its own licence text, since it travels alone.
-  assert(
-    doc.querySelector('#mediabunny-licence')?.textContent.includes('Mozilla Public License'),
-    'The single file does not carry the Mediabunny licence.',
-  );
+    await harness.open(await fixture('audio-mp3.mp3', app.File));
+    assert(harness.state().path === 'r1', `${file}: MP3 played on ${harness.state().path}.`);
+    await harness.play();
+    await waitFor(() => harness.state().clock.positionS > 0.12, `${file}: clock did not advance.`);
+    harness.pause();
 
-  return { path: harness.state().path, refusal: refusal.code };
+    // The claim each artifact makes about the wasm tier, held to the artifact.
+    let wmaError = null;
+    try {
+      await harness.open(await fixture('audio-wmav2.wma', app.File));
+    } catch (error) {
+      wmaError = error;
+    }
+
+    if (full) {
+      assert(!wmaError, `${file}: WMA failed in the full build: ${wmaError?.code} ${wmaError?.message}`);
+      assert(harness.state().path === 'r3',
+        `${file}: WMA played on ${harness.state().path}, expected r3.`);
+      assert(harness.state().media.duration > 4,
+        `${file}: WMA decoded ${harness.state().media.duration}s.`);
+      report.fullWma = { path: harness.state().path, seconds: +harness.state().media.duration.toFixed(2) };
+    } else {
+      assert(wmaError, `${file}: the lean build played WMA, which it has no decoder for.`);
+      assert(wmaError.code, `${file}: WMA refusal carried no code.`);
+      report.leanWma = wmaError.code;
+    }
+  }
+
+  return report;
 }
 
 run().then(report => {

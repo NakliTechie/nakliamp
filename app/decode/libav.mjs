@@ -11,9 +11,27 @@
 // Loading is lazy and happens once: the module is only instantiated when a file
 // actually needs it, so a library of MP3s never pays for it.
 
-const BASE_URL = new URL('../../vendor/libav/', import.meta.url);
-const LOADER_URL = new URL('libav-6.10.9.0-nakliamp.loader.mjs', BASE_URL);
-const FACTORY_URL = new URL('libav-6.10.9.0-nakliamp.wasm.mjs', BASE_URL);
+const VENDOR_DIR = '../../vendor/libav/';
+const LOADER_FILE = 'libav-6.10.9.0-nakliamp.loader.mjs';
+const FACTORY_FILE = 'libav-6.10.9.0-nakliamp.wasm.mjs';
+
+/**
+ * Where the vendored files live, when they live anywhere.
+ *
+ * Computed lazily and never at module scope. In the single-file build
+ * `import.meta.url` is a blob URL, and a blob URL cannot be the base of a
+ * relative `new URL(...)` — doing it at the top level threw before any app
+ * code ran and killed the whole page, not just this tier. There, the loader
+ * publishes blob URLs instead and these are never needed.
+ */
+function vendorUrls() {
+  try {
+    const base = new URL(VENDOR_DIR, import.meta.url);
+    return { loader: new URL(LOADER_FILE, base).href, factory: new URL(FACTORY_FILE, base).href, base: base.href };
+  } catch {
+    return null;
+  }
+}
 
 // libav reads packets up to a byte budget. There is no "read everything"
 // sentinel: `-1` silently yields a single packet and therefore zero frames.
@@ -57,17 +75,26 @@ async function libav() {
     // In the single-file build these are blob URLs the loader publishes; the
     // module graph cannot see a dynamic import built from a URL.
     const inlined = globalThis.__nakliampLibavUrls;
-    const LibAV = (await import(inlined?.loader ?? LOADER_URL.href)).default;
-    const factory = (await import(inlined?.factory ?? FACTORY_URL.href)).default;
+    const vendored = inlined ? null : vendorUrls();
+    if (!inlined && !vendored) {
+      throw decodeError('ERR_NAKLIAMP_LIBAV_UNAVAILABLE', 'This build carries no software decoder.');
+    }
+    const LibAV = (await import(inlined?.loader ?? vendored.loader)).default;
+    const factory = (await import(inlined?.factory ?? vendored.factory)).default;
     // The single-file build embeds the wasm bytes rather than a URL, so the
     // artifact fetches nothing. Everywhere else the file sits beside the glue.
-    const wasmBinary = globalThis.__nakliampWasmBinary;
+    // `wasmurl` is libav's own supported hook. Threading the binary through
+    // `factory` looked equivalent and was not: the loader never passed it on,
+    // so emscripten fell back to streaming a URL that does not exist in a
+    // single-file artifact.
+    const wasmUrl = globalThis.__nakliampWasmUrl;
     const instance = await LibAV.LibAV({
       noworker: true,
       nothreads: true,
       variant: 'nakliamp',
-      base: BASE_URL.href,
-      factory: wasmBinary ? options => factory({ ...options, wasmBinary }) : factory,
+      base: vendored?.base ?? '',
+      ...(wasmUrl ? { wasmurl: wasmUrl } : {}),
+      factory,
     });
     // ffmpeg logs informational lines to stderr, which emscripten routes to
     // console.error. The harness fails a run on any console error, and an
