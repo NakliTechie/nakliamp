@@ -10,6 +10,10 @@
 setTimeout(() => {
   console.error('L7_CONSOLE_SENTINEL');
   fetch('./l7-network-sentinel.bin').catch(() => {});
+  // A *successful* request to a third party used to pass every gate: only
+  // failures and 4xx/5xx were checked. This one is expected to succeed as far
+  // as the page is concerned, and the runner must still report it.
+  fetch('https://l7-remote-sentinel.example.com/beacon', { mode: 'no-cors' }).catch(() => {});
   setTimeout(() => {
     const result = document.querySelector('#result');
     result.dataset.status = 'fail';

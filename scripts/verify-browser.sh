@@ -73,7 +73,7 @@ if node "$repo_root/scripts/run-browser-harness.mjs" \
   echo "Runner diagnostic fixture did not fail as required." >&2
   exit 1
 fi
-for diagnostic_marker in L7_DECLARED_FAILURE L7_CONSOLE_SENTINEL l7-network-sentinel.bin; do
+for diagnostic_marker in L7_DECLARED_FAILURE L7_CONSOLE_SENTINEL l7-network-sentinel.bin l7-remote-sentinel.example.com; do
   if ! grep -F "$diagnostic_marker" "$diagnostic_log" >/dev/null; then
     echo "Runner diagnostics omitted $diagnostic_marker." >&2
     cat "$diagnostic_log" >&2

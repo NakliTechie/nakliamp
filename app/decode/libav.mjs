@@ -80,7 +80,19 @@ async function libav() {
       throw decodeError('ERR_NAKLIAMP_LIBAV_UNAVAILABLE', 'This build carries no software decoder.');
     }
     const LibAV = (await import(inlined?.loader ?? vendored.loader)).default;
-    const factory = (await import(inlined?.factory ?? vendored.factory)).default;
+    const emscripten = (await import(inlined?.factory ?? vendored.factory)).default;
+    // ffmpeg writes to stderr, and emscripten routes stderr to console.error.
+    // A file this tier cannot read is a refusal the caller reports, not a page
+    // error, so the stream is routed to console.debug: still there for anyone
+    // looking, no longer indistinguishable from something being broken.
+    // `av_log_set_level` does not cover it — these lines come from libav.js's
+    // own wrappers, not from the ffmpeg log. libav.js passes the factory only
+    // `wasmurl` and `variant`, so the hook is added by wrapping it here.
+    const factory = options => emscripten({
+      ...options,
+      print: (...parts) => console.debug('libav:', ...parts),
+      printErr: (...parts) => console.debug('libav:', ...parts),
+    });
     // The single-file build embeds the wasm bytes rather than a URL, so the
     // artifact fetches nothing. Everywhere else the file sits beside the glue.
     // `wasmurl` is libav's own supported hook. Threading the binary through
@@ -114,6 +126,23 @@ const decodeError = (code, message, cause) => {
 };
 
 /**
+ * The largest file this tier will take in.
+ *
+ * A decode costs the ArrayBuffer, a full copy inside the wasm filesystem, and
+ * the decoded Float32 output — several times the file, all at once, in the
+ * page's own heap. There was no bound at all, so a large enough file killed
+ * the tab instead of being refused. This is comfortably above any real
+ * lossless music track.
+ */
+const MAX_INPUT_BYTES = 256 * 1024 * 1024;
+
+// MEMFS is one flat namespace shared by every decode. A fixed name meant two
+// concurrent decodes of the same container wrote over each other mid-demux —
+// and the engine's supersede logic cancels the *caller*, not the decode
+// already running inside wasm.
+let decodeSequence = 0;
+
+/**
  * Decode a whole file to per-channel Float32Arrays.
  *
  * Whole-file decode matches the in-house tier's contract and suits the sizes
@@ -125,6 +154,12 @@ export async function decodeLibav(data) {
   if (!container) {
     throw decodeError('ERR_NAKLIAMP_LIBAV_UNKNOWN', 'This file is not a container the wasm decoder reads.');
   }
+  if (data.length > MAX_INPUT_BYTES) {
+    throw decodeError(
+      'ERR_NAKLIAMP_LIBAV_TOO_LARGE',
+      `This file is ${Math.round(data.length / 1024 / 1024)} MB; the software decoder reads up to ${MAX_INPUT_BYTES / 1024 / 1024} MB.`,
+    );
+  }
 
   let instance;
   try {
@@ -133,18 +168,28 @@ export async function decodeLibav(data) {
     throw decodeError('ERR_NAKLIAMP_LIBAV_UNAVAILABLE', 'The software decoder could not start.', error);
   }
 
-  const name = `input.${container}`;
+  decodeSequence += 1;
+  const name = `input-${decodeSequence}.${container}`;
+  // Every handle below is freed in the finally. They used to be freed only on
+  // the success path, so each refused file left a decoder context, a packet, a
+  // frame and an open demuxer inside the wasm heap for the life of the tab.
+  let format = null;
+  let context = null;
+  let packet = null;
+  let frame = null;
   try {
     await instance.writeFile(name, data);
-    const [format, streams] = await instance.ff_init_demuxer_file(name);
+    let streams;
+    [format, streams] = await instance.ff_init_demuxer_file(name);
     const audio = streams.find(stream => stream.codec_type === instance.AVMEDIA_TYPE_AUDIO);
     if (!audio) throw decodeError('ERR_NAKLIAMP_LIBAV_NO_AUDIO', 'This file has no audio stream.');
 
-    const [, context, packet, frame] = await instance.ff_init_decoder(audio.codec_id, audio.codecpar);
+    [, context, packet, frame] = await instance.ff_init_decoder(audio.codec_id, audio.codecpar);
 
     // Read to end of file. ff_read_frame_multi returns a batch and a status;
     // one call yields a single batch, which decodes to a few milliseconds.
     const frames = [];
+    let emptyBatches = 0;
     for (let guard = 0; guard < 100_000; guard += 1) {
       const [status, batch] = await instance.ff_read_frame_multi(format, packet, { limit: READ_LIMIT });
       const stream = batch[audio.index] ?? [];
@@ -155,19 +200,23 @@ export async function decodeLibav(data) {
         frames.push(...await instance.ff_decode_multi(context, packet, frame, [], true));
       }
       if (done) break;
-      if (!stream.length) break;
+      // A batch carrying packets for other streams only is ordinary in a file
+      // with cover art or a video stream; ending the read there truncated the
+      // track. What must end the read is a demuxer that has stopped advancing,
+      // which is a batch with no packets for any stream at all.
+      if (Object.values(batch).some(list => list.length)) emptyBatches = 0;
+      else if ((emptyBatches += 1) >= 3) break;
     }
     if (!frames.length) throw decodeError('ERR_NAKLIAMP_LIBAV_EMPTY', 'The software decoder produced no audio.');
 
-    const decoded = collect(frames);
-    await instance.ff_free_decoder(context, packet, frame);
-    await instance.avformat_close_input_js(format);
-    await instance.unlink(name);
-    return decoded;
+    return collect(frames);
   } catch (error) {
-    try { await instance.unlink(name); } catch { /* the file may never have been written */ }
     if (error?.code?.startsWith?.('ERR_NAKLIAMP_')) throw error;
     throw decodeError('ERR_NAKLIAMP_LIBAV_FAILED', `The software decoder could not read this file: ${error?.message ?? error}`, error);
+  } finally {
+    if (context) { try { await instance.ff_free_decoder(context, packet, frame); } catch { /* already gone */ } }
+    if (format) { try { await instance.avformat_close_input_js(format); } catch { /* already gone */ } }
+    try { await instance.unlink(name); } catch { /* the file may never have been written */ }
   }
 }
 

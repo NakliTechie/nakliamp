@@ -102,6 +102,14 @@ try {
   const cdp = cdpClient(socket);
   const consoleErrors = [];
   const networkFailures = [];
+  // What actually backs "no analytics — verify with the network tab".
+  //
+  // Failed requests and 4xx/5xx were the only thing checked, so a *successful*
+  // beacon to a third party passed every gate. The rule is the origin, not the
+  // outcome: this page may talk to the server serving it and to nothing else.
+  const remoteRequests = [];
+  const harnessOrigin = new URL(harnessUrl).origin;
+  const LOCAL_SCHEMES = new Set(['data:', 'blob:', 'about:', 'chrome-extension:', 'filesystem:']);
   const checkedResourceTypes = new Set(['Document', 'Script', 'Fetch', 'XHR', 'Media']);
   cdp.on('Runtime.exceptionThrown', ({ exceptionDetails }) => {
     consoleErrors.push(exceptionDetails.exception?.description || exceptionDetails.text);
@@ -120,6 +128,16 @@ try {
     if (entry.level === 'error' && entry.source !== 'network') {
       consoleErrors.push(`${entry.source}: ${entry.text}`);
     }
+  });
+  cdp.on('Network.requestWillBeSent', ({ request, type }) => {
+    let url;
+    try {
+      url = new URL(request.url);
+    } catch {
+      return; // an unparseable URL cannot name a remote host
+    }
+    if (LOCAL_SCHEMES.has(url.protocol) || url.origin === harnessOrigin) return;
+    remoteRequests.push(`${type ?? 'Other'}: ${request.method} ${request.url.slice(0, 200)}`);
   });
   cdp.on('Network.loadingFailed', event => {
     if (!event.canceled && checkedResourceTypes.has(event.type)) {
@@ -152,14 +170,15 @@ try {
     });
     const state = evaluation.result.value;
     if (state.status === 'pass') {
-      if (consoleErrors.length || networkFailures.length) {
+      if (consoleErrors.length || networkFailures.length || remoteRequests.length) {
         throw new Error([
           `${state.title} reached pass with browser errors.`,
           ...consoleErrors.map(error => `console: ${error}`),
           ...networkFailures.map(error => `network: ${error}`),
+          ...remoteRequests.map(error => `remote: ${error}`),
         ].join('\n'));
       }
-      console.log(`${state.title}: ${state.status}; console errors: 0; network failures: 0`);
+      console.log(`${state.title}: ${state.status}; console errors: 0; network failures: 0; remote requests: 0`);
       break;
     }
     if (state.status === 'fail') {
@@ -168,6 +187,7 @@ try {
         state.text,
         ...consoleErrors.map(item => `console: ${item}`),
         ...networkFailures.map(item => `network: ${item}`),
+        ...remoteRequests.map(item => `remote: ${item}`),
       ].join('\n'));
     }
     await delay(50);
@@ -182,6 +202,7 @@ try {
       `Harness timed out with status: ${finalEvaluation.result.value}`,
       ...consoleErrors.map(item => `console: ${item}`),
       ...networkFailures.map(item => `network: ${item}`),
+      ...remoteRequests.map(item => `remote: ${item}`),
     ].join('\n'));
   }
 } catch (error) {
