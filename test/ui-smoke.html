@@ -56,6 +56,31 @@ async function run() {
   await waitFor(() => harness.state().clock.positionS > 0.12, 'UI playback clock did not advance.');
   harness.pause();
 
+  // Exercise the real keyboard handler against the browser's range rounding.
+  const volume = doc.querySelector('#volume');
+  const setVolume = value => {
+    volume.value = String(value);
+    volume.dispatchEvent(new app.Event('input', { bubbles: true }));
+  };
+  const volumeKey = key => doc.body.dispatchEvent(new app.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  const assertVolume = expected => {
+    assert(Number(volume.value) === expected, `Slider volume differs from ${expected}.`);
+    assert(harness.state().clock.volume === expected, `Engine volume differs from ${expected}.`);
+    assert(Number(app.localStorage.getItem('nakliamp:volume')) === expected, `Saved volume differs from ${expected}.`);
+  };
+  for (const initial of [0.30, 0.31, 0.37]) {
+    setVolume(initial);
+    for (let pair = 0; pair < 3; pair++) {
+      volumeKey('ArrowUp');
+      assertVolume(Math.round((initial + 0.05) * 100) / 100);
+      volumeKey('ArrowDown');
+      assertVolume(initial);
+    }
+  }
+  setVolume(0.98); volumeKey('ArrowUp'); assertVolume(1);
+  setVolume(0.02); volumeKey('ArrowDown'); assertVolume(0);
+  setVolume(0.8);
+
   let refusal = null;
   try {
     await harness.open(await fixture('audio-wma.wma', app.File));
@@ -79,6 +104,9 @@ async function run() {
     await harness.open(await fixture('audio-mp3.mp3', app.File));
     await harness.play();
     for (const { id } of [...doc.querySelector('#vis-mode').options].map(option => ({ id: option.value }))) {
+      // Each mode needs a playing fixture; the one-second clip can end mid-loop.
+      await harness.seek(0);
+      await harness.play();
       harness.setVisualiserMode(id);
       await new Promise(resolve => setTimeout(resolve, 45));
       const state = harness.visualiser();
