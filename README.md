@@ -145,7 +145,7 @@ node scripts/build-single-file.mjs --full
 ```
 
 **Hosted.** The same app deploys as Cloudflare Worker Static Assets at
-<https://nakliamp.naklitechie.com/>. The published package contains only the
+<https://naklios.dev/apps/nakliamp/>. The published package contains only the
 app, its modules, the engine, the Mediabunny runtime and licence, and the
 corresponding-source notice in `VENDOR.md`.
 
