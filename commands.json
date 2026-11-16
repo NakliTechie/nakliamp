@@ -250,7 +250,7 @@
     {
       "name": "player.snapshot",
       "label": "Runtime snapshot",
-      "description": "The whole runtime state in one record, shaped after cliamp's IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.",
+      "description": "The whole runtime state in one record, shaped after cliamp's IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, the name of the saved playlist the queue was loaded from, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.",
       "scope": "read",
       "approval": "read",
       "group": "player",
@@ -313,6 +313,11 @@
           "play": {
             "type": "boolean",
             "description": "Start playing (default true)"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [
@@ -338,6 +343,11 @@
               "minLength": 1
             },
             "description": "Track ids. Omitted: the selected tracks, or the playing track"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [],
@@ -364,6 +374,11 @@
               "minLength": 1
             },
             "description": "Track ids. Omitted: the selected tracks, or the playing track"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [],
@@ -392,6 +407,11 @@
             "type": "integer",
             "description": "New position",
             "minimum": 0
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [
@@ -418,6 +438,11 @@
               "minimum": 0
             },
             "description": "Positions to remove"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [],
@@ -436,7 +461,13 @@
       "group": "queue",
       "input": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
+          }
+        },
         "required": [],
         "additionalProperties": false
       }
@@ -459,6 +490,11 @@
               "albums"
             ],
             "description": "Shuffle mode"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
           }
         },
         "required": [],
@@ -494,6 +530,40 @@
       "shortcut": [
         "R"
       ]
+    },
+    {
+      "name": "queue.play",
+      "label": "Play queue entry",
+      "description": "Jump to a queue entry and play it: by position (`index`, 0-based, from queue.read) or by track id (`id`, the first entry holding that track). Give one of the two. The queue itself is unchanged.",
+      "scope": "write",
+      "approval": "reversible",
+      "group": "queue",
+      "input": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "Queue position",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "Track id of a queued entry",
+            "minLength": 1
+          },
+          "play": {
+            "type": "boolean",
+            "description": "Start playing (default true)"
+          },
+          "if_revision": {
+            "type": "integer",
+            "description": "The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].",
+            "minimum": 0
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "queue.undo",
@@ -803,13 +873,19 @@
     {
       "name": "playlist.list",
       "label": "List playlists",
-      "description": "The playlists in the music folder (M3U, M3U8, PLS, XSPF, JSPF and smart playlists): name, kind and track count.",
+      "description": "The playlists in the music folder (M3U, M3U8, PLS, XSPF, JSPF and smart playlists): name, kind and track count. With `name`, that playlist's entries instead: position, track id (null when the file is not in the library), title and artist.",
       "scope": "read",
       "approval": "read",
       "group": "playlist",
       "input": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Playlist name",
+            "minLength": 1
+          }
+        },
         "required": [],
         "additionalProperties": false
       }
@@ -893,6 +969,63 @@
         },
         "required": [
           "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlist.rename",
+      "label": "Rename playlist",
+      "description": "Rename an M3U or M3U8 playlist: writes it under the new file name in the same folder and removes the old file. Refuses when the new name is taken. Undo (queue.undo) puts the old file back.",
+      "scope": "write",
+      "approval": "reversible",
+      "group": "playlist",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Current playlist name",
+            "minLength": 1
+          },
+          "to": {
+            "type": "string",
+            "description": "New name",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "name",
+          "to"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlist.remove",
+      "label": "Remove from playlist",
+      "description": "Remove one entry from an M3U or M3U8 playlist by position (from playlist.list with `name`). Rewrites only the playlist file; the audio file is never touched. Shows the entry and waits for approval.",
+      "scope": "destructive",
+      "approval": "destructive",
+      "group": "playlist",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Playlist name",
+            "minLength": 1
+          },
+          "index": {
+            "type": "integer",
+            "description": "Entry position, 0-based",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "index"
         ],
         "additionalProperties": false
       }
@@ -1266,6 +1399,27 @@
       ]
     },
     {
+      "name": "spectrum.get",
+      "label": "Spectrum",
+      "description": "The current spectrum as `bands` log-spaced levels from 0 to 1 (default 32, 20 Hz to 20 kHz), read from the same analyser the visualiser draws. Empty when nothing plays. One frame per call, as cliamp's spectrum.get.",
+      "scope": "read",
+      "approval": "read",
+      "group": "visualiser",
+      "input": {
+        "type": "object",
+        "properties": {
+          "bands": {
+            "type": "integer",
+            "description": "Number of bands (default 32)",
+            "minimum": 4,
+            "maximum": 128
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "visualiser.link_volume",
       "label": "Link visualiser to volume",
       "description": "Scale the visualiser's input by the current volume, so a quiet player draws a quiet picture. Without `on` it toggles. Milkdrop reads the audio graph itself and is not scaled.",
@@ -1419,6 +1573,25 @@
       "shortcut": [
         "Shift+M"
       ]
+    },
+    {
+      "name": "ui.pop_out",
+      "label": "Pop out the mini player",
+      "description": "Move the mini player into a small always-on-top window (Document Picture-in-Picture, Chromium only) or bring it back. Without `on` it toggles. Opening needs a click in the page, so an agent call that is not part of one refuses with [unavailable].",
+      "scope": "write",
+      "approval": "reversible",
+      "group": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "true pops out, false brings it back"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
     },
     {
       "name": "ai.playlist",
@@ -1683,6 +1856,20 @@
             "maxLength": 200
           }
         },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "history.clear",
+      "label": "Clear listening history",
+      "description": "Reset every track's play count and last-played time, which empties the recently played and most played lists. Ratings and favourites stay. Shows how many tracks change and waits for approval; it cannot be undone.",
+      "scope": "destructive",
+      "approval": "destructive",
+      "group": "library",
+      "input": {
+        "type": "object",
+        "properties": {},
         "required": [],
         "additionalProperties": false
       }
@@ -2174,6 +2361,10 @@
     {
       "code": "declined",
       "meaning": "The person did not approve a destructive command."
+    },
+    {
+      "code": "conflict",
+      "meaning": "The queue changed since the `if_revision` the command carried."
     },
     {
       "code": "unavailable",

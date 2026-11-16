@@ -50,9 +50,11 @@ function safeTrack(track) {
 }
 
 /**
- * The snapshot. `parts` is `{ status, queue: { length, index, revision }, eq: { enabled, preset },
- * visualiser: { mode, linkVolume }, dsp, mono, error }`, where `status` is the `player.status`
- * result. Unknown values become null; nothing outside the whitelist is copied.
+ * The snapshot. `parts` is `{ status, queue: { length, index, revision }, playlist, eq: { enabled,
+ * preset }, visualiser: { mode, linkVolume }, dsp, mono, error }`, where `status` is the
+ * `player.status` result and `playlist` the name of the saved playlist the queue was loaded
+ * from (cliamp's `playlist`), or null. Unknown values become null; nothing outside the
+ * whitelist is copied.
  */
 export function buildSnapshot(parts = {}) {
   const status = parts.status ?? {};
@@ -61,6 +63,7 @@ export function buildSnapshot(parts = {}) {
     ...playbackPart(status),
     mono: Boolean(parts.mono),
     queue: queuePart(parts.queue),
+    playlist: text(parts.playlist),
     eq: { enabled: Boolean(parts.eq?.enabled), preset: text(parts.eq?.preset) ?? 'flat' },
     visualiser: { mode: text(parts.visualiser?.mode), linkVolume: Boolean(parts.visualiser?.linkVolume) },
     dsp: dspPart(status.route, parts.dsp),
@@ -112,7 +115,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const PAYLOADS = {
   'track-changed': s => ({ track: s.track, durationS: s.durationS }),
   'state-changed': s => ({ state: s.state, playing: s.playing }),
-  'queue-changed': s => ({ queue: s.queue, shuffle: s.shuffle, repeat: s.repeat }),
+  'queue-changed': s => ({ queue: s.queue, playlist: s.playlist, shuffle: s.shuffle, repeat: s.repeat }),
   'volume-changed': s => ({ volume: s.volume, volumeDb: s.volumeDb, muted: s.muted }),
   'settings-changed': s => ({ speed: s.speed, mono: s.mono, eq: s.eq, visualiser: s.visualiser, dsp: s.dsp }),
   position: s => ({ positionS: s.positionS, durationS: s.durationS }),

@@ -25,7 +25,7 @@ const parts = (over = {}) => ({
 test('snapshot: every field the brief names, and no path anywhere', () => {
   const s = buildSnapshot(parts());
   assert.deepEqual(Object.keys(s).toSorted(), [
-    'dsp', 'durationS', 'eq', 'error', 'mono', 'muted', 'playing', 'positionS', 'queue', 'repeat',
+    'dsp', 'durationS', 'eq', 'error', 'mono', 'muted', 'playing', 'playlist', 'positionS', 'queue', 'repeat',
     'seekable', 'shuffle', 'speed', 'state', 'track', 'version', 'visualiser', 'volume', 'volumeDb',
   ]);
   assert.deepEqual(s.track, { id: 't1', title: 'Song', artist: 'A', album: 'B', year: 2001, durationS: 183 });

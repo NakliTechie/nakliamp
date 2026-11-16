@@ -14,6 +14,10 @@
 //
 // Every edit (set, playNext, add, move, remove, clear, setShuffle) pushes one undo step.
 // Moving through the queue (next, prev, jump) and the repeat mode are not edits.
+//
+// `revision` counts every change a listener hears about (edits, moves through the queue,
+// repeat, undo), as cliamp's `playlist_revision` does. An agent sends it back as
+// `if_revision`, and `revisionConflict` refuses the command when the queue moved since.
 
 export const QUEUE_STORAGE_KEY = 'nakliamp:queue';
 export const SHUFFLE_MODES = Object.freeze(['off', 'tracks', 'albums']);
@@ -78,6 +82,16 @@ export function persistableState(s, isTransient = () => false) {
   return { ...s, entries: keep, unshuffled: s.unshuffled.filter(k => keys.has(k)), index };
 }
 
+/**
+ * The `[conflict]` check for a queue-editing command: null when `expected` is absent or
+ * equals `current`, else the refusal message. Kept pure so the runner and tests share it.
+ */
+export function revisionConflict(expected, current) {
+  if (expected === undefined || expected === null) return null;
+  if (expected === current) return null;
+  return `The queue changed since revision ${expected}; it is now at revision ${current}. Read it again and resend.`;
+}
+
 export function createQueue({ storage = defaultStorage(), albumOf = () => '', random = Math.random, storageKey = QUEUE_STORAGE_KEY, isTransient = () => false } = {}) {
   let entries = [];          // [{ key, id }] in play order
   let unshuffled = [];       // keys in the order the person built, used while shuffle is on
@@ -85,6 +99,7 @@ export function createQueue({ storage = defaultStorage(), albumOf = () => '', ra
   let shuffle = 'off';
   let repeat = 'off';
   let nextKey = 1;
+  let revision = 0;          // moves on every change a listener hears about; not persisted
   const undoStack = [];
   const listeners = new Set();
 
@@ -129,6 +144,7 @@ export function createQueue({ storage = defaultStorage(), albumOf = () => '', ra
   }
 
   function emit(reason, before) {
+    revision += 1;
     persist();
     const snap = snapshot();
     const info = { reason, currentChanged: before !== currentKey() };
@@ -194,6 +210,7 @@ export function createQueue({ storage = defaultStorage(), albumOf = () => '', ra
       shuffle,
       repeat,
       canUndo: undoStack.length > 0,
+      revision,
     };
   }
 
@@ -341,6 +358,7 @@ export function createQueue({ storage = defaultStorage(), albumOf = () => '', ra
     },
 
     snapshot,
+    revision: () => revision,
     onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

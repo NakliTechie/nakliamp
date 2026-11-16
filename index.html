@@ -206,6 +206,7 @@ html.vis-full{overflow:hidden}
 .vis-tile:hover,.vis-tile:focus-visible{border-color:var(--accent)}
 .vis-tile[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--panel-2)}
 .vis-tile canvas{display:block;width:100%;height:auto;aspect-ratio:2/1;border-radius:5px;background:#100d0a}
+.vis-tile .vis-tile-still{display:block;width:100%;height:auto;aspect-ratio:2/1;object-fit:cover;border-radius:5px;background:#100d0a}
 .vis-tile .vis-tile-note{display:grid;place-items:center;aspect-ratio:2/1;border-radius:5px;background:#100d0a;color:#9d9180}
 .vis-link{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
 .vis-pick{min-height:34px;max-width:120px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:13px var(--body)}
@@ -297,7 +298,7 @@ html.vis-full{overflow:hidden}
 /* Mini player (V6): art, title, transport and seek in a small window */
 html.mini .topbar,html.mini main,html.mini footer{display:none}
 html.mini .shell{min-height:0;grid-template-rows:auto;align-content:start;padding-bottom:0}
-html.mini .playerbar{position:static;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"art track" "vis vis" "transport transport" "time time" "exit exit";gap:10px;padding:14px;border:1px solid var(--line);border-radius:14px;max-width:420px;margin:14px auto 0;width:calc(100% - 28px);align-self:start}
+html.mini .playerbar{position:static;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"art track" "vis vis" "transport transport" "time time" "exit exit" "pop pop";gap:10px;padding:14px;border:1px solid var(--line);border-radius:14px;max-width:420px;margin:14px auto 0;width:calc(100% - 28px);align-self:start}
 html.mini .playerbar .pb-art{display:grid;grid-area:art;width:64px;height:64px}
 html.mini .pb-track{grid-area:track;max-width:none;align-self:center;text-align:left}
 html.mini .pb-transport{grid-area:transport;justify-content:center}
@@ -308,6 +309,10 @@ html.mini .vis-slot-bar:empty{display:none}
 html.mini .volume-wrap,html.mini .vis-pick,html.mini #output-device,html.mini .pb-modes{display:none}
 html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 #mini-exit{display:none}
+#mini-pop{display:none}
+html.mini #mini-pop:not([hidden]){display:inline-flex;grid-area:pop;justify-self:center}
+.pip-note{display:none}
+html.pip-out .pip-note{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);background:var(--panel);color:var(--muted);position:sticky;bottom:0;z-index:20}
 </style>
 </head>
 <body>
@@ -480,6 +485,11 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
     <select class="vis-pick" id="output-device" aria-label="Output device" hidden></select>
     <div class="vis-slot-bar" id="vis-slot-bar" title="Visualiser: click to see it large in Now playing"><div class="vis-wrap" id="vis-wrap"><canvas id="vis" aria-label="Spectrum visualiser" role="img"></canvas></div></div>
     <button class="chip-btn" id="mini-exit" type="button">Full player</button>
+    <button class="chip-btn" id="mini-pop" type="button" hidden title="Keep the mini player on top of other windows">Pop out</button>
+  </div>
+  <div class="pip-note" id="pip-note" role="status">
+    <span>The player is in a pop-out window.</span>
+    <button class="chip-btn" id="pip-return" type="button">Bring it back</button>
   </div>
 
   <!-- A refusal is about one file. It must not destroy the library or stop playback. -->
@@ -1775,6 +1785,7 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
 import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';
 import { createVisualiser, createPreviewGrid } from './app/visualiser/driver.mjs';
+import { MILKDROP_STILL_URL } from './app/visualiser/milkdrop-still.mjs';
 import {
   allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary, allPlaylists, allSmartPlaylists,
   setRating, setFavourite, getLoudness, putLoudness, loudnessKey, setMeta,
@@ -1804,6 +1815,7 @@ import { moreLikeThis } from './app/ai/similar.mjs';
 import { suggestGenres } from './app/ai/genres.mjs';
 import { registerWebMcpTools } from './app/agent/webmcp.mjs';
 import { CHANNEL_NAME, buildSnapshot, createEventPublisher, createChannelBridge, instanceId } from './app/agent/events.mjs';
+import { readSpectrum, DEFAULT_BANDS } from './app/agent/spectrum.mjs';
 import { mountNetworkPanel } from './app/ui/v1x-network.mjs';
 import { mountDuplicates, mountRename, mountFolders } from './app/ui/v1x-library-tools.mjs';
 import { mountSleepTimer } from './app/ui/v1x-timers.mjs';
@@ -1833,6 +1845,7 @@ import {
 } from './app/ui/shell/format.mjs';
 import { applyTheme } from './app/ui/shell/theme.mjs';
 import { createMediaSession } from './app/ui/shell/media-session.mjs';
+import { createPopOut } from './app/ui/shell/pip.mjs';
 
 const STRINGS = Object.freeze({
   en: Object.freeze({
@@ -1863,7 +1876,45 @@ const locale = 'en';
 const t = key => STRINGS[locale]?.[key] ?? STRINGS.en[key] ?? key;
 document.querySelectorAll('[data-t]').forEach(element => { element.textContent = t(element.dataset.t); });
 
-const $ = selector => document.querySelector(selector);
+// The player bar's own elements by id, taken once. The bar can move into a Document
+// Picture-in-Picture window (app/ui/shell/pip.mjs), where document.querySelector no
+// longer finds it; these references keep every control reachable in either document.
+const playerParts = new Map([document.querySelector('#playerbar'), ...document.querySelectorAll('#playerbar [id]')]
+  .map(element => [`#${element.id}`, element]));
+const $ = selector => playerParts.get(selector) ?? document.querySelector(selector);
+
+// The mini player in a Document Picture-in-Picture window (UX review minor 5). Popping
+// out leaves the tab in the full layout with a note, and closing the window brings the
+// bar back and restores the mini layout if it was on.
+let miniBeforePopOut = false;
+const popOut = createPopOut({
+  element: $('#playerbar'),
+  title: 'NakliAmp mini player',
+  onKeydown: event => onShortcutKey(event),
+  onOpen: () => paintPopOut(),
+  onClose: () => {
+    paintPopOut();
+    if (miniBeforePopOut && !settings.miniPlayer) saveSettings({ miniPlayer: true });
+    placeVisualiser();
+  },
+});
+
+/** Open the pop-out from a click: the window first (it needs the click), then the layout. */
+async function openPopOut() {
+  if (popOut.isOpen()) return;
+  miniBeforePopOut = settings.miniPlayer;
+  revealPlayer();
+  await popOut.open();
+  if (settings.miniPlayer) saveSettings({ miniPlayer: false });
+  placeVisualiser();
+}
+
+function paintPopOut() {
+  const out = popOut.isOpen();
+  document.documentElement.classList.toggle('pip-out', out);
+  $('#mini-pop').hidden = !popOut.supported;
+  $('#mini-exit').textContent = out ? 'Back to the tab' : 'Full player';
+}
 // Set inside the harness block at the end of this script, which the release
 // build cuts out, so a released file never reads the query flag. Every use
 // below runs after an await, by which time the block has run.
@@ -2866,6 +2917,15 @@ let autoplayNext = true;
 let engineAdvancing = false;
 let pendingLoad = Promise.resolve();
 
+// The saved playlist the queue was loaded from (cliamp's snapshot `playlist`). A queue
+// replaced from anywhere else, or cleared, has none; adding to it or reordering keeps it.
+let queuePlaylist = null;
+let incomingPlaylist = null;
+queue.onChange((snap, { reason }) => {
+  if (reason === 'set' || reason === 'clear') queuePlaylist = reason === 'set' ? incomingPlaylist : null;
+  incomingPlaylist = null;
+});
+
 queue.onChange((snap, { reason, currentChanged }) => {
   if (EDIT_REASONS.has(reason)) { editLog.push({ kind: 'queue' }); if (editLog.length > 200) editLog.shift(); }
   if (reason === 'shuffle' || reason === 'repeat' || reason === 'undo') {
@@ -3074,10 +3134,12 @@ engine.on('track-advanced', () => {
   preloadNext();
 });
 
-function playTracks(ids, startIndex = 0) {
+/** `playlist` names the saved playlist the ids came from, for the snapshot's `playlist`. */
+function playTracks(ids, startIndex = 0, { playlist = null } = {}) {
   const known = (ids ?? []).filter(id => Boolean(trackFor(id)));
   if (!known.length) return Promise.resolve(null);
   autoplayNext = true;
+  incomingPlaylist = playlist;
   queue.set(known, Math.max(0, Math.min(known.length - 1, startIndex | 0)));
   return pendingLoad;
 }
@@ -3361,6 +3423,7 @@ const stageShowsVisualiser = () => nowStage === 'vis' && visualiser.mode() !== '
 
 function visualiserHost() {
   if (isFullVisualiser()) return $('#vis-slot-full');
+  if (popOut.isOpen()) return $('#vis-slot-bar');
   if (!settings.miniPlayer && currentView() === 'now' && stageShowsVisualiser()) return $('#vis-slot-now');
   return $('#vis-slot-bar');
 }
@@ -3435,10 +3498,20 @@ function mountVisualiserPicker(root) {
     button.type = 'button';
     button.className = 'vis-tile';
     button.dataset.mode = id;
-    if (id === 'milkdrop' || id === 'none') {
+    if (id === 'milkdrop') {
+      // Milkdrop runs on WebGL only once chosen, so its tile shows a still frame.
+      const still = document.createElement('img');
+      still.className = 'vis-tile-still';
+      still.src = MILKDROP_STILL_URL;
+      still.alt = '';
+      still.width = PREVIEW_TILE.width;
+      still.height = PREVIEW_TILE.height;
+      button.title = 'A still frame. Choose Milkdrop to see it move.';
+      button.append(still);
+    } else if (id === 'none') {
       const note = document.createElement('span');
       note.className = 'vis-tile-note';
-      note.textContent = id === 'none' ? 'Off: show the cover' : 'Milkdrop: choose it to see it';
+      note.textContent = 'Off: show the cover';
       button.append(note);
     } else {
       const canvas = document.createElement('canvas');
@@ -3637,6 +3710,28 @@ async function createPlaylist(name, ids) {
   return { name, file: fileName, tracks: tracks.length };
 }
 
+/** `playlist.list { name }`: one playlist's entries, with library ids where the file is indexed. */
+function playlistEntriesFor(name) {
+  const playlist = findPlaylist(name);
+  if (!playlist) throw new CommandError('not-found', `No playlist named ${name}.`);
+  const byPath = new Map(libraryTracks.map(track => [track.path, track]));
+  const entries = playlist.entries.map((entry, position) => {
+    const track = entry.path ? byPath.get(entry.path) : null;
+    return { position, id: track?.id ?? null, title: entry.title ?? track?.title ?? null, artist: entry.artist ?? track?.artist ?? null };
+  });
+  return { name: playlist.name, kind: String(playlist.format ?? 'm3u').toLowerCase(), entries };
+}
+
+/** How a confirm step names one playlist entry: its title, else its file name. */
+function entryLabel(entry) {
+  return entry?.title || String(entry?.path ?? entry?.target ?? '').split('/').pop() || 'Untitled entry';
+}
+
+/** Library tracks with any listening history (history.clear). */
+function historyTracks() {
+  return libraryTracks.filter(track => (track.playCount || 0) > 0 || (track.lastPlayedAt || 0) > 0);
+}
+
 function findPlaylist(name) {
   const wanted = String(name).trim().toLowerCase();
   return playlistRows.find(row => row.name.toLowerCase() === wanted)
@@ -3695,31 +3790,46 @@ async function persistPlaylist(playlist, entries, message) {
   }
 }
 
+/** Where a playlist renamed to `name` would be written: same folder, M3U8. */
+function renamedPlaylistPath(playlist, name) {
+  const directory = playlist.path.split('/').slice(0, -1).join('/');
+  const file = `${safePlaylistFileName(name)}.m3u8`;
+  return { directory, file, path: `${directory ? `${directory}/` : ''}${file}` };
+}
+
+/**
+ * Rename a playlist through its folder handle: write it under the new name (with the new
+ * #PLAYLIST title), then remove the old file. Both writes go in the undo log, so undo
+ * puts the old file back. Two names can sanitise to one file name; then it rewrites in place.
+ */
+async function renamePlaylistFile(playlist, name) {
+  assertWritable(playlist);
+  const { directory, file, path: nextPath } = renamedPlaylistPath(playlist, name);
+  const renamingFile = nextPath !== playlist.path;
+  const oldText = renamingFile ? await readLibraryText(playlist.path) : null;
+  await writeLogged(nextPath, toM3u8(playlistLines(playlist.entries), { name, base: directory }));
+  if (renamingFile) {
+    await removeLibraryFile(playlist.path);
+    editLog.push({ kind: 'file', path: playlist.path, before: oldText });
+  }
+  if (activePlaylist === playlist.path) activePlaylist = nextPath;
+  if (queuePlaylist === playlist.name) { queuePlaylist = name; agentEvents.poke(); }
+  await rescanPath(nextPath);
+  return { file, path: nextPath };
+}
+
 async function renamePlaylist() {
   const playlist = playlistRows.find(row => row.path === activePlaylist);
   if (!playlist) return;
   try { assertWritable(playlist); } catch (error) { reportScan(error.message); return; }
   const name = prompt('Rename playlist', playlist.name);
   if (!name || name === playlist.name) return;
-
-  const directory = playlist.path.split('/').slice(0, -1).join('/');
-  const safe = safePlaylistFileName(name);
-  const nextPath = `${directory ? `${directory}/` : ''}${safe}.m3u8`;
-  const lines = playlistLines(playlist.entries);
-  // Two names can sanitise to one file name; then the rename is a rewrite in place.
-  const renamingFile = nextPath !== playlist.path;
-  if (renamingFile && await playlistFileExists(nextPath)
+  const { path: nextPath } = renamedPlaylistPath(playlist, name);
+  if (nextPath !== playlist.path && await playlistFileExists(nextPath)
     && !confirm(`${nextPath} already exists. Replace it?`)) return;
   try {
-    const oldText = renamingFile ? await readLibraryText(playlist.path) : null;
-    await writeLogged(nextPath, toM3u8(lines, { name, base: directory }));
-    if (renamingFile) {
-      await removeLibraryFile(playlist.path);
-      editLog.push({ kind: 'file', path: playlist.path, before: oldText });
-    }
-    activePlaylist = nextPath;
-    reportScan(`Renamed to ${safe}.m3u8.`);
-    await rescanPath(nextPath);
+    const { file } = await renamePlaylistFile(playlist, name);
+    reportScan(`Renamed to ${file}.`);
   } catch (error) {
     reportScan(`Could not rename: ${error.message}`);
   }
@@ -3760,7 +3870,8 @@ function selectLibraryRow(row) {
 /** Starting a track queues the whole list from that track (P5). */
 function playLibraryRow(row) {
   selectLibraryRow(row);
-  playTracks(visibleRows.map(track => track.id), Number(row.dataset.index)).catch(error => toast(error.message, 5000));
+  const playlist = activePlaylist && !$('#lib-search').value.trim() ? playlistRows.find(item => item.path === activePlaylist)?.name ?? null : null;
+  playTracks(visibleRows.map(track => track.id), Number(row.dataset.index), { playlist }).catch(error => toast(error.message, 5000));
 }
 // Arrow keys move between rows of the Tracks list (K4).
 $('#lib-list').addEventListener('keydown', event => {
@@ -4259,7 +4370,7 @@ const handlers = {
   'queue.read': input => {
     const snap = queue.snapshot();
     const entries = snap.ids.map((id, position) => ({ position, ...(trackSummary(byId.get(id)) ?? { id, title: null }) }));
-    return { index: snap.index, shuffle: snap.shuffle, repeat: snap.repeat, canUndo: snap.canUndo || editLog.length > 0, ...page(entries, input) };
+    return { index: snap.index, revision: snap.revision, shuffle: snap.shuffle, repeat: snap.repeat, canUndo: snap.canUndo || editLog.length > 0, ...page(entries, input) };
   },
   'queue.set': async input => {
     const ids = input.ids.filter(id => byId.has(id));
@@ -4304,6 +4415,22 @@ const handlers = {
     toast(`Repeat: ${mode}`);
     return { repeat: mode };
   },
+  // cliamp's queue.play: jump to an entry already in the queue; the queue is unchanged.
+  'queue.play': async input => {
+    if ((input.index === undefined) === (input.id === undefined)) throw new CommandError('invalid-input', 'queue.play: give one of index or id.');
+    const snap = queue.snapshot();
+    const index = input.index ?? snap.ids.indexOf(input.id);
+    if (index < 0) throw new CommandError('not-found', `Track ${input.id} is not in the queue.`);
+    if (index >= snap.length) throw new CommandError('not-found', `The queue has ${snap.length} entr${snap.length === 1 ? 'y' : 'ies'}; there is no position ${index}.`);
+    autoplayNext = input.play !== false;
+    if (index === snap.index) {
+      if (input.play !== false) { await seekTrack(0); engine.play(); }
+    } else {
+      queue.jump(index);
+    }
+    await pendingLoad;
+    return { index, id: snap.ids[index], revision: queue.revision() };
+  },
   'queue.undo': async () => ({ undone: await undoLast() }),
   'queue.save_playlist': input => createPlaylist(input.name, queue.snapshot().ids),
 
@@ -4331,7 +4458,7 @@ const handlers = {
   // `coverFrom` (a MusicBrainz release id) is resolved to the cover here and handed on as `context.picture`.
   'track.edit_tags': withCoverFrom(createEditTagsHandler(ctx)),
 
-  'playlist.list': () => ({
+  'playlist.list': input => (input.name ? playlistEntriesFor(input.name) : {
     playlists: [
       ...playlistRows.map(row => ({ name: row.name, kind: String(row.format ?? 'm3u').toLowerCase(), tracks: tracksForPlaylist(row).found.length, entries: row.entries.length })),
       ...smartRows.map(row => ({ name: row.rule?.name ?? 'Smart playlist', kind: 'smart', tracks: safeSmartCount(row.rule) })),
@@ -4372,9 +4499,48 @@ const handlers = {
       await removeLibraryFile(playlist.path);
       editLog.push({ kind: 'file', path: playlist.path, before });
       if (activePlaylist === playlist.path) activePlaylist = null;
+      if (queuePlaylist === playlist.name) queuePlaylist = null;
       reportScan(`Deleted ${playlist.name}.`);
       await rescanPath(playlist.path);
       return { deleted: playlist.name };
+    },
+  },
+  'playlist.rename': async input => {
+    const playlist = findPlaylist(input.name);
+    if (!playlist) throw new CommandError('not-found', `No playlist named ${input.name}.`);
+    try { assertWritable(playlist); } catch (error) { throw new CommandError('refused', error.message); }
+    const { path: nextPath } = renamedPlaylistPath(playlist, input.to);
+    if (nextPath !== playlist.path && await playlistFileExists(nextPath)) {
+      throw new CommandError('refused', `${nextPath} already exists in your music folder. Pick another name.`);
+    }
+    const { file } = await renamePlaylistFile(playlist, input.to);
+    toast(`Renamed ${playlist.name} to ${input.to}.`);
+    return { name: input.to, file, from: playlist.name };
+  },
+  // cliamp's playlist.remove: one entry out of a saved playlist. Only the playlist file changes.
+  'playlist.remove': {
+    diff: input => {
+      const playlist = findPlaylist(input.name);
+      const entry = playlist?.entries[input.index];
+      if (!entry) return { lines: [playlist ? `${playlist.name} has no entry ${input.index}.` : `No playlist named ${input.name}.`], unchanged: true };
+      return {
+        title: `Remove from ${playlist.name}?`,
+        summary: 'This entry leaves the playlist file. The audio file stays where it is. Undo (Ctrl+Z) can write the playlist back during this session.',
+        lines: [`${input.index + 1}. ${entryLabel(entry)}`],
+        approveLabel: 'Remove entry',
+      };
+    },
+    run: async input => {
+      const playlist = findPlaylist(input.name);
+      if (!playlist) throw new CommandError('not-found', `No playlist named ${input.name}.`);
+      const entry = playlist.entries[input.index];
+      if (!entry) throw new CommandError('not-found', `${playlist.name} has ${playlist.entries.length} entries; there is no position ${input.index}.`);
+      try { assertWritable(playlist); } catch (error) { throw new CommandError('refused', error.message); }
+      const base = playlist.path.split('/').slice(0, -1).join('/');
+      const next = playlist.entries.filter((_, position) => position !== input.index);
+      await writeLogged(playlist.path, toM3u8(playlistLines(next), { name: playlist.name, base }));
+      await rescanPath(playlist.path);
+      return { name: playlist.name, removed: entryLabel(entry), entries: next.length };
     },
   },
   // Saving under an existing name overwrites that rule file (the smart editor edits this way).
@@ -4417,6 +4583,8 @@ const handlers = {
     return { mode: applied };
   },
   'visualiser.full': input => ({ full: toggleFullVisualiser(input.on) }),
+  // cliamp's spectrum.get: one frame of bands from the visualiser's analyser.
+  'spectrum.get': input => readSpectrum(engine.analyser(), { count: input.bands ?? DEFAULT_BANDS, playing: statusOf().playing }),
   'visualiser.picker': input => ({ open: toggleVisualiserPicker(input.open) }),
   'visualiser.link_volume': input => ({ linkVolume: saveSettings({ visualiserLinkVolume: input.on ?? !settings.visualiserLinkVolume }).visualiserLinkVolume }),
 
@@ -4428,7 +4596,22 @@ const handlers = {
   },
   'view.keymap': () => { open('keymap'); return { view: 'keymap' }; },
   'ui.theme': input => ({ theme: saveSettings({ theme: input.theme }).theme }),
-  'ui.mini': input => ({ mini: saveSettings({ miniPlayer: input.on ?? !settings.miniPlayer }).miniPlayer }),
+  'ui.mini': input => {
+    // Leaving the mini player while it is popped out brings it back to the tab.
+    if (popOut.isOpen() && input.on !== true) { popOut.close(); return { mini: settings.miniPlayer, popOut: false }; }
+    return { mini: saveSettings({ miniPlayer: input.on ?? !settings.miniPlayer }).miniPlayer };
+  },
+  'ui.pop_out': async input => {
+    const on = input.on ?? !popOut.isOpen();
+    if (!on) { popOut.close(); return { popOut: false }; }
+    if (!popOut.supported) throw new CommandError('unavailable', 'This browser has no Document Picture-in-Picture; Chrome and Edge 116 or later have it.');
+    try {
+      await openPopOut();
+    } catch (error) {
+      throw new CommandError('unavailable', `The pop-out window did not open (${String(error?.message ?? error)}). It opens from a click on Pop out.`);
+    }
+    return { popOut: true };
+  },
 
   'ai.playlist': async input => {
     const chat = host.aiReady() ? body => host.aiChat(body) : null;
@@ -4653,6 +4836,26 @@ const handlers = {
     return { file: plan.name, synced: Boolean(result.synced) };
   }),
 
+  'history.clear': {
+    diff: () => {
+      const played = historyTracks();
+      return {
+        title: 'Clear listening history?',
+        summary: `Play counts and last-played times go back to zero for ${played.length} track${played.length === 1 ? '' : 's'}, so Recently played and Most played empty. Ratings and favourites stay. This cannot be undone.`,
+        lines: played.slice(0, 12).map(track => `${track.title || track.name} (${track.playCount || 0} play${track.playCount === 1 ? '' : 's'})`)
+          .concat(played.length > 12 ? [`and ${played.length - 12} more`] : []),
+        approveLabel: 'Clear history',
+        ...(played.length ? {} : { unchanged: true }),
+      };
+    },
+    run: async () => {
+      const played = historyTracks();
+      for (const track of played) await patchTrack(track.id, { playCount: 0, lastPlayedAt: 0 });
+      notifyLibrary();
+      toast(`Cleared the listening history of ${played.length} track${played.length === 1 ? '' : 's'}.`);
+      return { cleared: played.length };
+    },
+  },
   'queue.more_like_this': async input => {
     const seed = playingTrack && !playingTrack.transient ? playingTrack : null;
     if (!seed) throw new CommandError('unavailable', 'Play a track from your library first: more like this starts from it.');
@@ -4742,7 +4945,7 @@ function safeSmartCount(rule) {
   try { return evaluateSmart(rule, libraryTracks).length; } catch { return 0; }
 }
 
-const run = bindCommands(handlers, { confirm: request => confirmCommand(request) });
+const run = bindCommands(handlers, { confirm: request => confirmCommand(request), revision: () => queue.revision() });
 
 /** A browser error a person can act on (minor 9): a folder that is gone says so. */
 function plainError(error) {
@@ -4761,13 +4964,15 @@ function reportCommandError(error) {
 
 // Every key goes through the command list (K1 to K3). Text fields keep their keys.
 // Bubble phase on window, and events a panel already handled (Space on a list row) are skipped.
-addEventListener('keydown', event => {
+// The pop-out mini player's window sends its keys here too.
+function onShortcutKey(event) {
   if (event.defaultPrevented) return;
   const hit = matchShortcut(event);
   if (!hit) return;
   event.preventDefault();
   run(hit.name, hit.input, { context: { from: 'key' } }).catch(reportCommandError);
-});
+}
+addEventListener('keydown', onShortcutKey);
 
 // The agent face and the host (N1 to N4).
 host.registerCommands(hostCommandList(run));
@@ -4787,14 +4992,14 @@ registerWebMcpTools({ run }).catch(error => console.warn('[nakliamp] WebMCP regi
 // NakliOS's SDK has no app-to-host event call and WebMCP has no notifications, so
 // the channel is the one event sink (docs/agent-face.md).
 const agentInstance = instanceId();
-let queueRevision = 0;
 let lastPlayerError = null;
-queue.onChange(() => { queueRevision += 1; agentEvents.poke(); });
+queue.onChange(() => agentEvents.poke());
 function snapshotParts() {
   const snap = queue.snapshot();
   return {
     status: statusOf(),
-    queue: { length: snap.length, index: snap.index, revision: queueRevision },
+    queue: { length: snap.length, index: snap.index, revision: snap.revision },
+    playlist: queuePlaylist,
     eq: settings.eq,
     visualiser: { mode: visualiser.mode(), linkVolume: settings.visualiserLinkVolume },
     dsp: engine.state().dsp,
@@ -4916,6 +5121,8 @@ $('#timer-chip').addEventListener('click', () => open('sleep'));
 $('#theme-toggle').addEventListener('click', () => run('ui.theme', { theme: nextTheme() }).catch(reportCommandError));
 $('#mini-toggle').addEventListener('click', () => run('ui.mini').catch(reportCommandError));
 $('#mini-exit').addEventListener('click', () => run('ui.mini', { on: false }).catch(reportCommandError));
+$('#mini-pop').addEventListener('click', () => run('ui.pop_out', { on: true }).catch(reportCommandError));
+$('#pip-return').addEventListener('click', () => run('ui.pop_out', { on: false }).catch(reportCommandError));
 $('#now-fav').addEventListener('click', () => { if (playingTrack) run('track.favourite', { ids: [playingTrack.id] }).catch(reportCommandError); });
 $('#now-inspect').addEventListener('click', () => open('inspector', playingTrack?.id ?? null));
 $('#now-tags').addEventListener('click', () => { if (playingTrack) open('tags', [playingTrack.id]); });
@@ -5048,6 +5255,9 @@ if (HARNESS) {
     agentInstance: () => agentInstance,
     pickerTilesDrawn: () => visualiserPreview?.drawn() ?? null,
     visibleTracks: () => libraryVisible().map(track => ({ ...track })),
+    popOut: () => ({ supported: popOut.supported, open: popOut.isOpen(), barInPage: document.contains($('#playerbar')) }),
+    queuePlaylist: () => queuePlaylist,
+    milkdropPreset: () => visualiser.milkdrop()?.presetName() ?? null,
   });
 }
 // nakliamp:harness-end
@@ -5067,6 +5277,7 @@ if (settings.outputDeviceId) applyOutputDevice();
 flushScrobbles();
 paintTheme();
 paintMini();
+paintPopOut();
 paintModes();
 paintSeekButtons();
 paintNowTools();

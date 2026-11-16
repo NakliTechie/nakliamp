@@ -50,7 +50,7 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 | --- | --- | --- |
 | `capabilities` | `{ type: 'capabilities' }` on the channel; `commands.json` for the full list | Names only; schemas are in `commands.json` |
 | `state.get` | `player.snapshot` | Field map below |
-| `spectrum.get` | Not built | A browser can post analyser bands; no client asks for them yet |
+| `spectrum.get` | `spectrum.get { bands? }` | One frame per call: 32 log-spaced bands (4 to 128 with `bands`), 20 Hz to 20 kHz, each 0 to 1, from the analyser the visualiser draws; empty while nothing plays |
 | `operation.submit` | `{ type: 'command' }` | Answered once, with the result; no job record |
 | `job.get`, `job.cancel` | Not applicable in a browser tab | Each command answers with its outcome in one reply, so there is no job to look up |
 | `subscribe` | Not needed | Every listener on the channel receives every event; filter on `event` |
@@ -80,7 +80,7 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 | `vis` | `visualiser.mode { mode }` or `{ step }` | The mode list is in `commands.json` and in `invalid-input` messages; `visualiser.picker` opens the live picker |
 | `queue` (append) | `queue.add { ids }` | |
 | `queue.list` | `queue.read { offset, limit }` | Pages by 20 |
-| `queue.play` | Not built | `queue.set { ids, startIndex }` replaces the queue and starts at an entry |
+| `queue.play` | `queue.play { index }` or `{ id }` | Jumps to an entry already queued (by position, or the first entry holding that track id) and plays it; the queue itself is unchanged |
 | `queue.enqueue` | `queue.play_next { ids }` | NakliAmp has one queue; play-next inserts after the current entry |
 | `queue.remove` | `queue.remove` | Reversible: `queue.undo` restores it |
 | `queue.move` | `queue.move` | Allowed while shuffled; cliamp refuses with `conflict` |
@@ -93,14 +93,14 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 | `save` (copy a track to `~/Music`) | Not applicable in a browser tab | A tab writes only into a folder the person grants; no command exists |
 | `lyrics` | `lyrics.fetch` | Opt-in network (LRCLIB); embedded and `.lrc` lyrics need no network |
 | `history` | `library.browse { by: 'recentlyPlayed' }` | |
-| `history.clear` | Not built | |
+| `history.clear` | `history.clear` | Destructive: resets every play count and last-played time after the person approves; ratings and favourites stay. Refused on the channel |
 | `provider.*` (12 operations) | Not applicable today | Remote libraries and radio are the opt-in network tranche (M4) |
 | `playlist.create` | `playlist.create` | |
-| `playlist.rename` | Not built | |
+| `playlist.rename` | `playlist.rename { name, to }` | Writes the M3U8 under the new file name through the folder handle and removes the old file; refuses a taken name; undo puts the old file back |
 | `playlist.delete` | `playlist.delete` | Destructive: refused on the channel |
 | `playlist.add`, `playlist.add_many` | `playlist.add { ids }` | |
 | `playlist.replace` | `queue.save_playlist` | Saves the queue as a playlist |
-| `playlist.remove` | Not built | |
+| `playlist.remove` | `playlist.remove { name, index }` | Destructive, as cliamp's "remove a saved playlist track": rewrites only the playlist file without that entry, never the audio file. `playlist.list { name }` gives the positions. Refused on the channel |
 | `playlist.bookmark` | `track.favourite` | |
 | `plugin.call`, `plugin.commands` | Not applicable | NakliAmp has no plugin host |
 
@@ -109,7 +109,7 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 | cliamp field | NakliAmp field | Notes |
 | --- | --- | --- |
 | `revision` | `revision` | Moves when any published event except `position` fires |
-| `playlist_revision` | `queue.revision` | Moves on every queue change, including a move with the same length |
+| `playlist_revision` | `queue.revision` | Moves on every queue change, including a move with the same length; also in `queue.read`. Send it back as `if_revision` |
 | `state` | `state` | playing, paused, stopped |
 | `track` | `track` | `{ id, title, artist, album, year, durationS }`; never a path |
 | `logical_track`, `playback_detached` | Not applicable | One playing track; no detached playback |
@@ -117,7 +117,7 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 | `duration` | `durationS` | |
 | `seekable` | `seekable` | True when a track is loaded with a known length |
 | `volume` (dB) | `volumeDb`; also `volume` (slider 0 to 1) and `muted` | |
-| `playlist` | Not built | The name of a loaded saved playlist is not tracked |
+| `playlist` | `playlist` | The saved playlist the queue was loaded from (playing a row of a playlist in the library or the browse view), or null; a rename follows it, a queue replaced from elsewhere or cleared drops it. Also in the `queue-changed` event |
 | `index` | `queue.index` | -1 when empty, as cliamp |
 | `total` | `queue.length` | |
 | `play_next_total` | Not applicable | No separate play-next list |
@@ -144,7 +144,7 @@ position once a second while playing, because a page has no cheap way to poll an
 | --- | --- | --- |
 | `runtime.state` | `track-changed` | `{ track, durationS }` |
 | `runtime.state`, `runtime.playback` | `state-changed` | `{ state, playing }` |
-| `runtime.playlist` | `queue-changed` | `{ queue, shuffle, repeat }` |
+| `runtime.playlist` | `queue-changed` | `{ queue, playlist, shuffle, repeat }` |
 | `runtime.state` (volume) | `volume-changed` | `{ volume, volumeDb, muted }` |
 | `runtime.settings` | `settings-changed` | `{ speed, mono, eq, visualiser, dsp }` |
 | (none) | `position` | `{ positionS, durationS }`, 1 Hz while playing |
@@ -161,6 +161,6 @@ position once a second while playing, because a page has no cheap way to poll an
 | `unknown_operation`, `not_found` | `not-found` |
 | `unavailable` | `unavailable` |
 | `internal_error` | `refused` |
-| `conflict` | Not built: no command takes `if_revision` yet |
+| `conflict` | `conflict`: queue edits (`queue.set`, `add`, `play_next`, `move`, `remove`, `clear`, `shuffle`, `play`) take `if_revision`, the snapshot's `queue.revision`; a stale one is refused before the command runs |
 | `invalid_version`, `invalid_request`, `canceled` | Not applicable: messages that are not commands are ignored, and nothing is cancellable |
 | (none) | `declined` (the person said no in the app), `refused` (destructive or consent command on the channel) |

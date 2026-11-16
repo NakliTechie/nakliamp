@@ -746,13 +746,21 @@ export function mountBrowse(root, ctx) {
     }
   }
 
+  // The saved playlist a play starts from, so the snapshot can name it (smart playlists too).
+  function sourcePlaylist(index) {
+    if (state.view !== 'playlists') return {};
+    if (state.drill) return { playlist: state.drill.label };
+    const row = data.rows[index];
+    return row ? { playlist: displayLabel(row) } : {};
+  }
+
   function playFrom(index) {
     if (data.kind === 'tracks') {
       const ids = data.rows.map(track => track.id);
-      ctx.playTracks?.(ids, Math.max(0, index));
+      ctx.playTracks?.(ids, Math.max(0, index), sourcePlaylist(index));
     } else {
       const ids = rowTracks(index).map(track => track.id);
-      if (ids.length) ctx.playTracks?.(ids, 0);
+      if (ids.length) ctx.playTracks?.(ids, 0, sourcePlaylist(index));
     }
   }
 

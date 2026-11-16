@@ -16,6 +16,9 @@
 // its tiles only while open, and the volume link. Same pattern as
 // test/v1-features.html: every check runs, and the gate passes only when every
 // check passes and the page logged no console error or unhandled rejection.
+// The 2026-11-17 gaps follow on a small OPFS music folder: spectrum.get, queue.play,
+// if_revision conflicts, the snapshot's playlist name, playlist.rename, playlist.remove,
+// history.clear, and ui.pop_out refusing without a click.
 
 const result = document.querySelector('#result');
 const frame = document.querySelector('#app');
@@ -48,6 +51,39 @@ async function fixture(name, WindowFile) {
   const response = await fetch(`./fixtures/${name}`);
   assert(response.ok, `${name}: fixture request failed (${response.status})`);
   return new WindowFile([await response.arrayBuffer()], name, { type: response.headers.get('content-type') || '' });
+}
+
+const FOLDER = 'nakliamp-agent-face-gate';
+
+function toneWav(seconds, frequency) {
+  const rate = 22050;
+  const frames = rate * seconds;
+  const bytes = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => [...text].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * frequency * 2 * Math.PI) * 12000), true);
+  return bytes;
+}
+
+async function buildFolder() {
+  const opfs = await navigator.storage.getDirectory();
+  try { await opfs.removeEntry(FOLDER, { recursive: true }); } catch { /* not there */ }
+  const root = await opfs.getDirectoryHandle(FOLDER, { create: true });
+  for (const [name, hz] of [['Gate One.wav', 440], ['Gate Two.wav', 660]]) {
+    const writable = await (await root.getFileHandle(name, { create: true })).createWritable();
+    await writable.write(toneWav(30, hz));
+    await writable.close();
+  }
+  return root;
+}
+
+async function folderHas(root, name) {
+  try { await root.getFileHandle(name); return true; } catch { return false; }
 }
 
 // ------------------------------------------------------------- channel ----
@@ -186,7 +222,138 @@ async function run() {
     notes.durationS = (await command('player.snapshot')).value.durationS;
   });
 
+  // ---- the agent-face gaps (2026-11-17) ------------------------------------
+  const root = await buildFolder();
+  await harness.adoptFolder(root);
+  await harness.openLibrary();
+  await waitFor(() => harness.libraryTracks() === 2, () => `Scan indexed ${harness.libraryTracks()} of 2 tracks.`, 30_000);
+  const idOf = title => harness.tracks().find(track => track.title === title || track.name?.startsWith(title))?.id;
+  const ids = [idOf('Gate One'), idOf('Gate Two')];
+
+  await check('capabilities: the new read and reversible commands, not the new destructive ones', async () => {
+    const names = (await send({ type: 'capabilities' })).value.commands;
+    for (const name of ['spectrum.get', 'queue.play', 'playlist.rename', 'ui.pop_out']) assert(names.includes(name), `${name} missing`);
+    for (const name of ['history.clear', 'playlist.remove']) assert(!names.includes(name), `${name} offered`);
+  });
+
+  await check('queue.play by index and by id, with a current if_revision', async () => {
+    assert(ids.every(Boolean), `ids ${JSON.stringify(ids)}`);
+    const set = await command('queue.set', { ids, play: false });
+    assert(set.ok, JSON.stringify(set.error));
+    const revision = (await command('player.snapshot')).value.queue.revision;
+    assert(Number.isInteger(revision) && revision > 0, `revision ${revision}`);
+    const read = (await command('queue.read')).value;
+    assert(read.revision === revision, `queue.read revision ${read.revision}, snapshot ${revision}`);
+    const jump = await command('queue.play', { index: 1, if_revision: revision });
+    assert(jump.ok && jump.value.id === ids[1], JSON.stringify(jump));
+    await waitFor(() => harness.playingId() === ids[1], () => `playing ${harness.playingId()}`);
+    const back = await command('queue.play', { id: ids[0] });
+    assert(back.ok && back.value.index === 0, JSON.stringify(back));
+    await waitFor(() => harness.playingId() === ids[0], () => `playing ${harness.playingId()}`);
+    const missing = await command('queue.play', { index: 9 });
+    assert(!missing.ok && missing.error.code === 'not-found', JSON.stringify(missing));
+    const both = await command('queue.play', { index: 0, id: ids[0] });
+    assert(!both.ok && both.error.code === 'invalid-input', JSON.stringify(both));
+  });
+
+  await check('if_revision: a stale one is refused with conflict and the queue is unchanged', async () => {
+    const snap = (await command('player.snapshot')).value;
+    const stale = snap.queue.revision - 1;
+    for (const [name, input] of [['queue.clear', {}], ['queue.remove', { indices: [0] }], ['queue.play', { index: 1 }], ['queue.move', { from: 0, to: 1 }]]) {
+      const reply = await command(name, { ...input, if_revision: stale });
+      assert(!reply.ok && reply.error.code === 'conflict', `${name}: ${JSON.stringify(reply)}`);
+    }
+    const after = (await command('player.snapshot')).value;
+    assert(after.queue.length === 2 && after.queue.revision === snap.queue.revision, `queue moved: ${JSON.stringify(after.queue)}`);
+    notes.queueRevision = after.queue.revision;
+  });
+
+  await check('spectrum.get: 32 bands from 0 to 1 while playing, empty when paused', async () => {
+    await harness.seek(0);
+    assert((await command('player.play')).ok, 'play refused');
+    await waitFor(() => harness.state().clock.playing, 'not playing');
+    const frame = await waitFor(async () => {
+      const reply = await command('spectrum.get');
+      return reply.ok && reply.value.bands.some(v => v > 0) ? reply.value : null;
+    }, 'spectrum.get never returned a band above 0 while playing', 6000);
+    assert(frame.bands.length === 32 && frame.bands.every(v => v >= 0 && v <= 1), JSON.stringify(frame.bands));
+    const eight = (await command('spectrum.get', { bands: 8 })).value;
+    assert(eight.bands.length === 8, `bands: 8 gave ${eight.bands.length}`);
+    notes.spectrumPeakBand = frame.bands.indexOf(Math.max(...frame.bands));
+    assert((await command('player.pause')).ok, 'pause refused');
+    await waitFor(() => !harness.state().clock.playing, 'still playing');
+    const quiet = (await command('spectrum.get')).value;
+    assert(Array.isArray(quiet.bands) && quiet.bands.length === 0 && quiet.playing === false, JSON.stringify(quiet));
+  });
+
+  await check('snapshot playlist: playing from a saved playlist names it; playlist.rename renames the file and the name', async () => {
+    const made = await command('playlist.create', { name: 'Gate List', ids });
+    assert(made.ok, JSON.stringify(made.error));
+    await waitFor(() => folderHas(root, 'Gate List.m3u8'), 'Gate List.m3u8 not written');
+    await waitFor(() => harness.playlists() >= 1, 'playlist not indexed');
+    const listed = (await command('playlist.list', { name: 'Gate List' })).value;
+    assert(listed.entries.length === 2 && listed.entries[1].id === ids[1], JSON.stringify(listed));
+    // Play it as a person would: pick the playlist in the library and double-click a row.
+    await harness.openLibrary();
+    const select = doc.querySelector('#lib-playlist');
+    select.value = [...select.options].find(option => option.textContent.startsWith('Gate List'))?.value ?? '';
+    select.dispatchEvent(new app.Event('change', { bubbles: true }));
+    const row = await waitFor(() => doc.querySelector('#lib-list .lib-row'), 'no playlist row');
+    row.dispatchEvent(new app.MouseEvent('dblclick', { bubbles: true }));
+    await waitFor(async () => (await command('player.snapshot')).value.playlist === 'Gate List',
+      async () => `snapshot playlist ${(await command('player.snapshot')).value.playlist}`);
+    const mark = events.length;
+    const renamed = await command('playlist.rename', { name: 'Gate List', to: 'Gate Renamed' });
+    assert(renamed.ok && renamed.value.file === 'Gate Renamed.m3u8', JSON.stringify(renamed));
+    assert(await folderHas(root, 'Gate Renamed.m3u8') && !await folderHas(root, 'Gate List.m3u8'), 'the file was not renamed');
+    await waitFor(async () => (await command('player.snapshot')).value.playlist === 'Gate Renamed', 'snapshot kept the old name');
+    await waitFor(() => eventsSince(mark, 'queue-changed').some(e => e.data.playlist === 'Gate Renamed'), 'no queue-changed event with the new name');
+    const taken = await command('playlist.rename', { name: 'Gate Renamed', to: 'Gate Renamed' });
+    assert(taken.ok || taken.error.code === 'refused', JSON.stringify(taken));
+  });
+
+  await check('playlist.remove: refused on the channel; in the app it drops one entry and keeps the audio file', async () => {
+    const refused = await command('playlist.remove', { name: 'Gate Renamed', index: 0 });
+    assert(!refused.ok && refused.error.code === 'refused', JSON.stringify(refused));
+    const out = await harness.run('playlist.remove', { name: 'Gate Renamed', index: 0 });
+    assert(out.entries === 1, JSON.stringify(out));
+    const text = await (await (await root.getFileHandle('Gate Renamed.m3u8')).getFile()).text();
+    assert(!text.includes('Gate One.wav') && text.includes('Gate Two.wav'), text);
+    assert(await folderHas(root, 'Gate One.wav') && await folderHas(root, 'Gate Two.wav'), 'an audio file is gone');
+    await waitFor(async () => (await command('playlist.list', { name: 'Gate Renamed' })).value.entries.length === 1, 'playlist.list still shows 2 entries');
+  });
+
+  await check('history.clear: refused on the channel; Cancel keeps counts; approved it resets them', async () => {
+    const played = () => harness.tracks().filter(track => track.playCount > 0 || track.lastPlayedAt > 0).length;
+    await waitFor(() => played() > 0, 'nothing has a play count yet');
+    const refused = await command('history.clear');
+    assert(!refused.ok && refused.error.code === 'refused', JSON.stringify(refused));
+    const pending = harness.runAsPerson('history.clear', {}).then(() => 'ran', error => error.code ?? error.message);
+    const dialog = await waitFor(() => doc.querySelector('.nk-confirm')?.closest('.nk-dlg'), 'No confirm dialog for history.clear.');
+    const cancel = [...dialog.querySelectorAll('button')].find(button => /cancel/i.test(button.textContent));
+    assert(cancel, 'no Cancel button');
+    cancel.click();
+    assert(await pending === 'declined', 'history.clear ran after Cancel');
+    assert(played() > 0, 'Cancel cleared the history');
+    const out = await harness.run('history.clear', {});
+    assert(out.cleared >= 1 && played() === 0, `cleared ${out.cleared}, ${played()} still played`);
+    const recent = (await command('library.browse', { by: 'recentlyPlayed' })).value;
+    assert((recent.total ?? recent.items?.length ?? recent.tracks?.length ?? 0) === 0, JSON.stringify(recent).slice(0, 300));
+  });
+
+  await check('ui.pop_out: the control exists; without a click the channel gets unavailable', async () => {
+    const button = doc.querySelector('#mini-pop');
+    assert(button, 'no Pop out control');
+    const supported = 'documentPictureInPicture' in app;
+    assert(button.hidden === !supported, `Pop out hidden ${button.hidden}, supported ${supported}`);
+    const reply = await command('ui.pop_out', { on: true });
+    assert(!reply.ok && reply.error.code === 'unavailable', JSON.stringify(reply));
+    assert(harness.popOut().open === false && harness.popOut().barInPage === true, JSON.stringify(harness.popOut()));
+    notes.popOutSupported = supported;
+  });
+
   try { harness.pause(); } catch { /* page gone */ }
+  try { await (await navigator.storage.getDirectory()).removeEntry(FOLDER, { recursive: true }); } catch { /* app may hold it */ }
   notes.events = [...new Set(events.map(e => e.event))];
   return { errors: [...(app.__errs ?? []), ...(window.__errs ?? [])] };
 }

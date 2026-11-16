@@ -94,7 +94,7 @@ const RAW = [
     description: 'What is playing: track id, title, artist, album, position and duration in seconds, playing or paused, volume, muted, shuffle, repeat, and the decoder route.',
     input: obj() },
   { name: 'player.snapshot', group: 'player', scope: 'read', label: 'Runtime snapshot',
-    description: 'The whole runtime state in one record, shaped after cliamp\'s IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.',
+    description: 'The whole runtime state in one record, shaped after cliamp\'s IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, the name of the saved playlist the queue was loaded from, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.',
     input: obj() },
 
   // ----------------------------------------------------------------- queue ----
@@ -123,6 +123,9 @@ const RAW = [
   { name: 'queue.repeat', group: 'queue', scope: 'reversible', label: 'Repeat',
     description: 'Set repeat to off, all or one. Without `mode` it moves to the next mode.',
     input: obj({ mode: oneOf(REPEAT_MODES, 'Repeat mode') }), keys: [{ key: 'R' }] },
+  { name: 'queue.play', group: 'queue', scope: 'reversible', label: 'Play queue entry',
+    description: 'Jump to a queue entry and play it: by position (`index`, 0-based, from queue.read) or by track id (`id`, the first entry holding that track). Give one of the two. The queue itself is unchanged.',
+    input: obj({ index: int('Queue position', { minimum: 0 }), id: str('Track id of a queued entry', { minLength: 1 }), play: bool('Start playing (default true)') }) },
   { name: 'queue.undo', group: 'queue', scope: 'reversible', label: 'Undo queue edit',
     description: 'Undo the last queue or playlist edit.', input: obj(), keys: [{ key: 'Mod+Z' }] },
   { name: 'queue.save_playlist', group: 'queue', scope: 'reversible', label: 'Save queue as playlist',
@@ -160,8 +163,8 @@ const RAW = [
 
   // ------------------------------------------------------------- playlists ----
   { name: 'playlist.list', group: 'playlist', scope: 'read', label: 'List playlists',
-    description: 'The playlists in the music folder (M3U, M3U8, PLS, XSPF, JSPF and smart playlists): name, kind and track count.',
-    input: obj() },
+    description: 'The playlists in the music folder (M3U, M3U8, PLS, XSPF, JSPF and smart playlists): name, kind and track count. With `name`, that playlist\'s entries instead: position, track id (null when the file is not in the library), title and artist.',
+    input: obj({ name: str('Playlist name', { minLength: 1 }) }) },
   { name: 'playlist.create', group: 'playlist', scope: 'reversible', label: 'New playlist',
     description: 'Create an M3U8 playlist in the music folder, optionally with tracks.',
     input: obj({ name: str('Playlist name', { minLength: 1, maxLength: 120 }), ids: trackIds('Tracks to put in it') }, ['name']) },
@@ -171,6 +174,12 @@ const RAW = [
   { name: 'playlist.delete', group: 'playlist', scope: 'destructive', label: 'Delete playlist',
     description: 'Delete a playlist file from the music folder. Shows what goes and waits for approval.',
     input: obj({ name: str('Playlist name', { minLength: 1 }) }, ['name']) },
+  { name: 'playlist.rename', group: 'playlist', scope: 'reversible', label: 'Rename playlist',
+    description: 'Rename an M3U or M3U8 playlist: writes it under the new file name in the same folder and removes the old file. Refuses when the new name is taken. Undo (queue.undo) puts the old file back.',
+    input: obj({ name: str('Current playlist name', { minLength: 1 }), to: str('New name', { minLength: 1, maxLength: 120 }) }, ['name', 'to']) },
+  { name: 'playlist.remove', group: 'playlist', scope: 'destructive', label: 'Remove from playlist',
+    description: 'Remove one entry from an M3U or M3U8 playlist by position (from playlist.list with `name`). Rewrites only the playlist file; the audio file is never touched. Shows the entry and waits for approval.',
+    input: obj({ name: str('Playlist name', { minLength: 1 }), index: int('Entry position, 0-based', { minimum: 0 }) }, ['name', 'index']) },
   { name: 'smart.create', group: 'playlist', scope: 'reversible', label: 'New smart playlist',
     description: 'Save a smart playlist rule as <name>.nakliamp-smart.json in the music folder. Rules match all or any; each is { field, op, value }.',
     input: obj({
@@ -212,6 +221,9 @@ const RAW = [
   { name: 'visualiser.picker', group: 'visualiser', scope: 'read', label: 'Visualiser picker',
     description: 'Open the visualiser picker, where every mode draws live in a small tile, or close it. Without `open` it toggles.',
     input: obj({ open: bool('true opens, false closes') }), keys: [{ key: 'Alt+V' }] },
+  { name: 'spectrum.get', group: 'visualiser', scope: 'read', label: 'Spectrum',
+    description: 'The current spectrum as `bands` log-spaced levels from 0 to 1 (default 32, 20 Hz to 20 kHz), read from the same analyser the visualiser draws. Empty when nothing plays. One frame per call, as cliamp\'s spectrum.get.',
+    input: obj({ bands: int('Number of bands (default 32)', { minimum: 4, maximum: 128 }) }) },
   { name: 'visualiser.link_volume', group: 'visualiser', scope: 'reversible', label: 'Link visualiser to volume',
     description: 'Scale the visualiser\'s input by the current volume, so a quiet player draws a quiet picture. Without `on` it toggles. Milkdrop reads the audio graph itself and is not scaled.',
     input: obj({ on: bool('true links, false unlinks') }) },
@@ -237,6 +249,9 @@ const RAW = [
   { name: 'ui.mini', group: 'view', scope: 'reversible', label: 'Mini player',
     description: 'Switch to the compact mini player or back. Without `on` it toggles.',
     input: obj({ on: bool('true shows the mini player') }), keys: [{ key: 'Shift+M' }] },
+  { name: 'ui.pop_out', group: 'view', scope: 'reversible', label: 'Pop out the mini player',
+    description: 'Move the mini player into a small always-on-top window (Document Picture-in-Picture, Chromium only) or bring it back. Without `on` it toggles. Opening needs a click in the page, so an agent call that is not part of one refuses with [unavailable].',
+    input: obj({ on: bool('true pops out, false brings it back') }) },
 
   // -------------------------------------------------------------------- ai ----
   { name: 'ai.playlist', group: 'ai', scope: 'read', label: 'Playlist from a description',
@@ -273,6 +288,9 @@ const RAW = [
   { name: 'eq.export_eqf', group: 'sound', scope: 'read', label: 'Export Winamp EQ',
     description: 'Save the current equaliser curve as a Winamp .eqf file.', input: obj({ name: str('Preset name', { minLength: 1, maxLength: 200 }) }) },
 
+  { name: 'history.clear', group: 'library', scope: 'destructive', label: 'Clear listening history',
+    description: 'Reset every track\'s play count and last-played time, which empties the recently played and most played lists. Ratings and favourites stay. Shows how many tracks change and waits for approval; it cannot be undone.',
+    input: obj() },
   { name: 'library.duplicates', group: 'library', scope: 'read', label: 'Duplicates',
     description: 'Groups of tracks that look like the same recording: exact (same size and length) or likely (same artist and title within 2 seconds), with the suggested keeper. Nothing is deleted.',
     input: obj({ kind: oneOf(['exact', 'likely'], 'Only this kind'), ...page() }) },
@@ -336,12 +354,21 @@ const RAW = [
     description: 'Send waiting listens to ListenBrainz now.', input: obj() },
 ];
 
+// Queue-editing commands accept `if_revision`, cliamp's guard against stale edits: the
+// runner refuses with `[conflict]` when the queue's revision has moved past it.
+const REVISIONED = new Set(['queue.set', 'queue.add', 'queue.play_next', 'queue.move', 'queue.remove', 'queue.clear', 'queue.shuffle', 'queue.play']);
+const ifRevision = int('The queue revision this edit expects (player.snapshot queue.revision, or queue.read revision). A stale one is refused with [conflict].', { minimum: 0 });
+function withRevision(c) {
+  if (!REVISIONED.has(c.name)) return c;
+  return { ...c, ifRevision: true, input: { ...c.input, properties: { ...c.input.properties, if_revision: ifRevision } } };
+}
+
 function freezeDeep(value) {
   if (value && typeof value === 'object') { Object.values(value).forEach(freezeDeep); Object.freeze(value); }
   return value;
 }
 
-export const COMMANDS = freezeDeep(RAW.map(c => (c.keys ? { ...c, shortcut: c.keys.map(k => k.key) } : { ...c })));
+export const COMMANDS = freezeDeep(RAW.map(withRevision).map(c => (c.keys ? { ...c, shortcut: c.keys.map(k => k.key) } : { ...c })));
 export const commandByName = new Map(COMMANDS.map(c => [c.name, c]));
 export const GROUP_LABELS = Object.freeze({
   player: 'Playback', queue: 'Queue', library: 'Library', playlist: 'Playlists',
@@ -356,6 +383,7 @@ export const ERROR_CODES = Object.freeze([
   ['not-found', 'No command, track, playlist or handler by that name.'],
   ['invalid-input', 'The input does not match the command\'s JSON Schema.'],
   ['declined', 'The person did not approve a destructive command.'],
+  ['conflict', 'The queue changed since the `if_revision` the command carried.'],
   ['unavailable', 'The command cannot run here (no music folder, no tag writing in this browser, no host model).'],
   ['refused', 'Any other refusal.'],
 ]);
