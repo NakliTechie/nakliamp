@@ -1,12 +1,25 @@
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const [browserBin, harnessUrl, profilePath] = process.argv.slice(2);
-if (!browserBin || !harnessUrl || !profilePath) {
-  console.error('Usage: run-browser-harness.mjs BROWSER URL PROFILE_PATH');
+const [browserBin, harnessUrl, requestedProfile] = process.argv.slice(2);
+if (!browserBin || !harnessUrl) {
+  console.error('Usage: run-browser-harness.mjs BROWSER URL [PROFILE_PATH]');
   process.exit(2);
 }
+
+// A Chrome profile must never land in the working tree: a manual run once
+// passed a relative name and committed a whole profile folder (y/). With no
+// path, or a path inside the repository, the runner makes its own temporary
+// profile and deletes it, by that exact path, when the run ends.
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const insideRepo = path => !relative(repoRoot, resolve(path)).startsWith('..');
+const ownProfile = !requestedProfile || insideRepo(requestedProfile);
+const profilePath = ownProfile ? mkdtempSync(join(tmpdir(), 'nakliamp-harness-profile-')) : requestedProfile;
 
 const chrome = spawn(browserBin, [
   '--headless=new',
@@ -216,4 +229,5 @@ try {
     await Promise.race([once(chrome, 'exit'), delay(2_000)]);
     if (chrome.exitCode === null) chrome.kill('SIGKILL');
   }
+  if (ownProfile) rmSync(profilePath, { recursive: true, force: true });
 }

@@ -1,4 +1,0 @@
-/*
-  Content-Security-Policy: frame-ancestors 'self' https://naklios.dev https://naklios.com
-  Referrer-Policy: no-referrer
-  X-Content-Type-Options: nosniff

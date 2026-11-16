@@ -23,3 +23,6 @@ plan/
 #  ignore stray downloads / caches here)
 *.log
 dist/
+
+# A Chrome profile from a manual harness run was once committed here.
+/y/
