@@ -128,7 +128,26 @@ async function run() {
     harness.setVisualiserMode('bars');
     assert(harness.toggleFullVisualiser() === true, 'Full window did not engage.');
     assert(doc.querySelector('#vis-wrap').classList.contains('full'), 'Full window class missing.');
+    // UX review B1: the full-window canvas must fill the window, not hang off a
+    // page box (a backdrop filter on the player bar once pinned it there).
+    {
+      const box = doc.querySelector('#vis-wrap').getBoundingClientRect();
+      const fits = Math.abs(box.left) < 1 && Math.abs(box.top) < 1
+        && Math.abs(box.width - app.innerWidth) < 1 && Math.abs(box.height - app.innerHeight) < 1;
+      assert(fits, `The full-window visualiser is ${box.width}x${box.height} at ${box.left},${box.top} in a ${app.innerWidth}x${app.innerHeight} window.`);
+    }
     assert(harness.toggleFullVisualiser() === false, 'Full window did not release.');
+    // UX review M1: Now playing shows the visualiser large, in its stage.
+    doc.querySelector('#tab-now').click();
+    {
+      const slot = doc.querySelector('#vis-slot-now');
+      assert(slot.contains(doc.querySelector('#vis')), 'Now playing does not hold the visualiser.');
+      const box = doc.querySelector('#stage').getBoundingClientRect();
+      assert(box.width >= 240 && box.height >= 240, `The Now playing stage is ${box.width}x${box.height}.`);
+    }
+    doc.querySelector('#stage-cover').click();
+    assert(doc.querySelector('#vis-slot-bar').contains(doc.querySelector('#vis')), 'Cover in the stage did not return the visualiser to the player bar.');
+    doc.querySelector('#stage-vis').click();
     harness.pause();
   }
 

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp agent face gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:860px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// Agent face gate: the app runs in an iframe and this page drives it from a
+// second BroadcastChannel named `nakliamp`, as another tab of the same origin
+// would. Checks: capabilities, the snapshot, play and the events it causes, a
+// destructive command refused, an unknown name, the visualiser picker drawing
+// its tiles only while open, and the volume link. Same pattern as
+// test/v1-features.html: every check runs, and the gate passes only when every
+// check passes and the page logged no console error or unhandled rejection.
+
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const passed = [];
+const failed = [];
+const notes = {};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await sleep(40);
+  }
+  throw new Error(typeof message === 'function' ? await message() : message);
+}
+
+async function check(id, fn) {
+  try {
+    await fn();
+    passed.push(id);
+  } catch (error) {
+    failed.push(`${id}: ${String(error?.message ?? error).slice(0, 600)}`);
+  }
+}
+
+async function fixture(name, WindowFile) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new WindowFile([await response.arrayBuffer()], name, { type: response.headers.get('content-type') || '' });
+}
+
+// ------------------------------------------------------------- channel ----
+
+const channel = new BroadcastChannel('nakliamp');
+const events = [];
+const waiting = new Map();
+channel.addEventListener('message', ({ data }) => {
+  if (data?.type === 'event') events.push(data);
+  if (data?.type === 'result' && waiting.has(data.id)) { waiting.get(data.id)(data); waiting.delete(data.id); }
+});
+let nextId = 0;
+function send(message, timeoutMs = 10_000) {
+  const id = `gate-${++nextId}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`No reply to ${message.type} ${message.name ?? ''} within ${timeoutMs} ms.`)); }, timeoutMs);
+    waiting.set(id, reply => { clearTimeout(timer); resolve(reply); });
+    channel.postMessage({ ...message, id });
+  });
+}
+const command = (name, input = {}) => send({ type: 'command', name, input });
+const eventsSince = (mark, name) => events.slice(mark).filter(e => e.event === name);
+
+// ------------------------------------------------------------------ run ----
+
+async function run() {
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  notes.pageErrorGuard = app.__errs ? 'runner guard' : 'installed after boot';
+  if (!app.__errs) {
+    app.__errs = [];
+    const original = app.console.error.bind(app.console);
+    app.console.error = (...args) => { app.__errs.push(args.map(String).join(' ')); original(...args); };
+    app.addEventListener('error', event => app.__errs.push(`error: ${event.message}`));
+    app.addEventListener('unhandledrejection', event => app.__errs.push(`rejection: ${event.reason?.stack ?? event.reason}`));
+  }
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+  const instance = harness.agentInstance();
+  await harness.open(await fixture('audio-wav.wav', app.File));
+
+  await check('capabilities: read and reversible names, no destructive ones', async () => {
+    const reply = await send({ type: 'capabilities' });
+    assert(reply.ok && reply.instance === instance, `capabilities reply: ${JSON.stringify(reply).slice(0, 200)}`);
+    const names = reply.value.commands;
+    assert(names.includes('player.snapshot') && names.includes('player.play'), 'snapshot or play missing');
+    assert(!names.includes('playlist.delete') && !names.includes('track.edit_tags'), 'a destructive command is offered');
+    notes.channelCommands = names.length;
+  });
+
+  await check('snapshot: full state, loaded and paused, no path', async () => {
+    const reply = await command('player.snapshot');
+    assert(reply.ok, JSON.stringify(reply.error));
+    const s = reply.value;
+    for (const key of ['state', 'track', 'positionS', 'durationS', 'playing', 'volumeDb', 'shuffle', 'repeat', 'queue', 'eq', 'visualiser', 'dsp', 'revision', 'instance']) {
+      assert(key in s, `snapshot lacks ${key}`);
+    }
+    assert(s.state === 'paused' && s.playing === false, `state ${s.state}`);
+    assert(s.track?.title === 'audio-wav', `track ${JSON.stringify(s.track)}`);
+    assert(s.durationS > 0 && s.dsp.route, `duration ${s.durationS}, route ${s.dsp.route}`);
+    assert(s.visualiser.mode && typeof s.eq.preset === 'string', 'visualiser or eq missing');
+    assert(!JSON.stringify(s).includes('fixtures/'), 'a path leaked');
+    notes.snapshot = { state: s.state, route: s.dsp.route, revision: s.revision };
+  });
+
+  await check('play over the channel: result, state-changed, then position events', async () => {
+    const mark = events.length;
+    const reply = await command('player.play');
+    assert(reply.ok, JSON.stringify(reply.error));
+    await waitFor(() => eventsSince(mark, 'state-changed').some(e => e.data.state === 'playing'), 'No state-changed event with state playing.');
+    await waitFor(() => eventsSince(mark, 'position').length >= 1, 'No position event while playing.', 4000);
+    const seqs = events.slice(mark).map(e => e.seq);
+    assert(seqs.every((v, i) => i === 0 || v > seqs[i - 1]), `seq not increasing: ${seqs.join(',')}`);
+    assert(events.slice(mark).every(e => e.instance === instance), 'an event without this tab\'s instance');
+    const snap = (await command('player.snapshot')).value;
+    assert(snap.playing === true, `snapshot after play: ${snap.state}`);
+  });
+
+  await check('destructive command refused on the channel; nothing changes', async () => {
+    const before = harness.playlists();
+    const reply = await command('playlist.delete', { name: 'anything' });
+    assert(!reply.ok && reply.error.code === 'refused', JSON.stringify(reply));
+    const tags = await command('track.edit_tags', { title: 'x' });
+    assert(!tags.ok && tags.error.code === 'refused', JSON.stringify(tags));
+    assert(harness.playlists() === before, 'playlists changed');
+    assert(!harness.dialogName(), `a dialog opened: ${harness.dialogName()}`);
+  });
+
+  await check('unknown command and bad input', async () => {
+    const unknown = await command('player.explode');
+    assert(!unknown.ok && unknown.error.code === 'not-found', JSON.stringify(unknown));
+    const bad = await command('player.seek', { percent: 500 });
+    assert(!bad.ok && bad.error.code === 'invalid-input', JSON.stringify(bad));
+  });
+
+  await check('visualiser picker: one tile per mode, drawing only while open', async () => {
+    assert(harness.pickerTilesDrawn() === null, 'the picker draws while closed');
+    const reply = await command('visualiser.picker', { open: true });
+    assert(reply.ok && reply.value.open === true, JSON.stringify(reply));
+    const tiles = [...doc.querySelectorAll('.vis-tile')];
+    assert(tiles.length === harness.visualiser().modes, `${tiles.length} tiles for ${harness.visualiser().modes} modes`);
+    assert(tiles.filter(t => t.getAttribute('aria-pressed') === 'true').length === 1, 'not exactly one pressed tile');
+    await waitFor(() => harness.pickerTilesDrawn() > tiles.length, () => `tiles drew ${harness.pickerTilesDrawn()} frames`, 5000);
+    notes.tileFramesAfterOpen = harness.pickerTilesDrawn();
+    // Picking a tile sets the mode.
+    doc.querySelector('.vis-tile[data-mode="scope"]').click();
+    assert(harness.visualiser().mode === 'scope', `mode ${harness.visualiser().mode}`);
+    await command('visualiser.picker', { open: false });
+    await waitFor(() => harness.pickerTilesDrawn() === null && !doc.querySelector('.vis-tile'), 'the picker kept drawing after close', 3000);
+  });
+
+  await check('link to volume: setting, snapshot and settings-changed event', async () => {
+    const mark = events.length;
+    const reply = await command('visualiser.link_volume', { on: true });
+    assert(reply.ok && reply.value.linkVolume === true, JSON.stringify(reply));
+    assert(harness.settings().visualiserLinkVolume === true, 'setting not saved');
+    await waitFor(() => eventsSince(mark, 'settings-changed').some(e => e.data.visualiser.linkVolume === true), 'No settings-changed event.');
+    const snap = (await command('player.snapshot')).value;
+    assert(snap.visualiser.linkVolume === true, 'snapshot does not show the link');
+    await command('visualiser.link_volume', { on: false });
+  });
+
+  await check('play then pause over the channel: state-changed playing, then paused', async () => {
+    // The fixture is short and may have ended by now, so start it again first.
+    await harness.seek(0);
+    const mark = events.length;
+    assert((await command('player.play')).ok, 'play refused');
+    await waitFor(() => eventsSince(mark, 'state-changed').some(e => e.data.state === 'playing'), 'No state-changed event with state playing.');
+    const reply = await command('player.pause');
+    assert(reply.ok, JSON.stringify(reply.error));
+    await waitFor(() => eventsSince(mark, 'state-changed').some(e => e.data.state === 'paused'), 'No state-changed event with state paused.');
+    notes.durationS = (await command('player.snapshot')).value.durationS;
+  });
+
+  try { harness.pause(); } catch { /* page gone */ }
+  notes.events = [...new Set(events.map(e => e.event))];
+  return { errors: [...(app.__errs ?? []), ...(window.__errs ?? [])] };
+}
+
+run().then(({ errors }) => {
+  const ok = !failed.length && !errors.length;
+  result.dataset.status = ok ? 'pass' : 'fail';
+  result.textContent = JSON.stringify({ checks: passed.length + failed.length, passed: passed.length, failed, errors, notes }, null, 2);
+  document.title = `${ok ? 'PASS' : 'FAIL'} — NakliAmp agent face gate`;
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = JSON.stringify({ aborted: error.stack || String(error), passed: passed.length, failed, notes }, null, 2);
+  document.title = 'FAIL — NakliAmp agent face gate';
+}).finally(() => channel.close());
+</script>
+</body>
+</html>

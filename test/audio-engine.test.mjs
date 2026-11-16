@@ -145,7 +145,26 @@ test('analyser taps the chain output on the lane', async () => {
   const analyser = engine.analyser();
   assert.ok(analyser);
   const chainOutput = [...contexts[0].gains].find(gain => gain.outputs.has(contexts[0].destination));
-  assert.ok(chainOutput.outputs.has(analyser), 'analyser hangs off the chain output, in parallel');
+  // In parallel, through the gain that undoes the volume (the tap reads pre-volume).
+  const compensator = [...chainOutput.outputs].find(node => node.outputs?.has(analyser));
+  assert.ok(compensator, 'analyser hangs off the chain output, in parallel, through the compensator');
   assert.equal(engine.analysers().length, 2);
+  assert.equal(engine.state().dsp.analyserTap, 'pre-volume');
+  engine.destroy();
+});
+
+test('the analyser reads before the volume stage at every volume', async () => {
+  const { engine, contexts } = setup();
+  engine.setDsp({ gapless: 'always' });
+  await engine.load(file('a.flac', 1));
+  const analyser = engine.analyser();
+  const compensator = [...contexts[0].gains].find(gain => gain.outputs.has(analyser));
+  assert.ok(compensator, 'no compensating gain in front of the analyser');
+  engine.setVolume(0.25);
+  assert.ok(Math.abs(compensator.gain.value - 4) < 1e-9, `compensation ${compensator.gain.value} at volume 0.25`);
+  engine.setVolume(1);
+  assert.ok(Math.abs(compensator.gain.value - 1) < 1e-9, `compensation ${compensator.gain.value} at full volume`);
+  engine.setMuted(true);
+  assert.equal(compensator.gain.value, 1, 'muted: nothing to undo, so the tap stays at unity');
   engine.destroy();
 });

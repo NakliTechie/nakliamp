@@ -12,6 +12,12 @@ export class NakliAmpError extends Error {
   }
 }
 
+// Streamed R3 playback (long DSD and large software-decoded files).
+const STREAM_HEAD_BYTES = 64 * 1024; // bytes read to sniff before choosing whole or streamed decode
+const STREAM_AHEAD_S = 3; // seconds of PCM kept scheduled ahead of the clock
+const STREAM_LEAD_S = 0.05; // first chunk starts this far ahead of the context clock
+const STREAM_TICK_MS = 200; // pump interval, beside each chunk's own ended event
+
 const DEFAULT_CONFIG = Object.freeze({
   version: '0.2.0-m1',
   sync: { decodeAheadMs: 300, videoDropGraceMs: 20, audioRingSeconds: 1 },
@@ -312,6 +318,13 @@ function preferNativeRefusal(softwareError, nativeError) {
  * where Decoded is `{ sampleRate, channels: Float32Array[], frames }`. Both
  * methods may return a promise, so a decoder that must instantiate a wasm
  * module before it can answer is supported without the engine changing.
+ *
+ * A decoder may also stream: `streams(container, size) -> boolean` and
+ * `stream(Blob, { container, outputRate }) -> Stream`, where Stream is
+ * `{ sampleRate, channelCount, durationS, read(), seek(s), close() }` and
+ * `read()` yields `{ channels, frames, startS }` chunks or null at the end.
+ * The engine sniffs only the file's head, and a file the first matching
+ * decoder streams is never read whole.
  */
 export function createNakliAmpEngine({
   version = DEFAULT_CONFIG.version,
@@ -355,6 +368,13 @@ export function createNakliAmpEngine({
   let analyserOwner = null;
   let splitter = null;
   let channelAnalysers = null;
+  // The analysers read the level before the volume stage, as cliamp does: on
+  // every route the tap sits after the node that applies the volume (Reel's
+  // gain, the R3 gain, the lane's volume, then the chain), so a gain of
+  // 1 / volume between the tap point and the analysers undoes it. The picture
+  // is then the same at every volume, and "link to volume" in the shell scales
+  // it exactly once. At volume 0 there is nothing left to undo, so it is silent.
+  let tapCompensator = null;
 
   // DSP state. The chain stays off until the app calls setDsp, so a caller
   // that never asks for EQ, ReplayGain or gapless (the browser harnesses)
@@ -417,9 +437,13 @@ export function createNakliAmpEngine({
       next.smoothingTimeConstant = 0.72;
       // Inserted in parallel, never in series: the tap must not sit between the
       // output and the destination, where a mistake would silence playback.
-      graph.output.connect(next);
+      const compensator = graph.context.createGain();
+      graph.output.connect(compensator);
+      compensator.connect(next);
+      tapCompensator = compensator;
       analyser = next;
       analyserOwner = graph.output;
+      applyTapCompensation();
       return analyser;
     } catch {
       return null;
@@ -453,7 +477,8 @@ export function createNakliAmpEngine({
       if (!audioAnalyser()) return null;
       const split = graph.context.createChannelSplitter(2);
       // In parallel, like the summed tap: never between output and destination.
-      graph.output.connect(split);
+      // Through the same compensator, so both taps read before the volume stage.
+      (tapCompensator ?? graph.output).connect(split);
       const taps = [0, 1].map(channel => {
         const node = graph.context.createAnalyser();
         node.fftSize = 2048;
@@ -774,6 +799,11 @@ export function createNakliAmpEngine({
 
   /** Decode a whole file for the lane: browser first, NakliAmp's own decoders second. */
   async function laneDecode(file, context) {
+    // A file the software rung streams is one the lane would have to hold
+    // whole, which is what streaming exists to avoid.
+    if (await streamingDecoder(file)) {
+      throw new NakliAmpError('LaneStreamedError', 'ERR_NAKLIAMP_LANE_STREAMED', 'This file plays streamed on the software route.');
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     let buffer = null;
     let decoderName = null;
@@ -971,6 +1001,15 @@ export function createNakliAmpEngine({
 
   /** Keep the R3 clock continuous: fold the elapsed time in at the old rate first. */
   function applySoftwareRate() {
+    if (software.streamed) {
+      // Chunks already scheduled carry the old rate, so playback restarts at
+      // the current position with every chunk at the new one.
+      const track = software;
+      track.offsetS = streamedPosition(track);
+      track.rate = speed;
+      if (track.playing) startStreamed(track).catch(recordError);
+      return;
+    }
     if (software.playing) {
       software.offsetS = softwarePosition();
       software.startedAt = software.context.currentTime;
@@ -1083,11 +1122,32 @@ export function createNakliAmpEngine({
       next: scheduled ? scheduled.mode : (pendingNext?.state ?? 'none'),
       trim: laneState.trim,
       laneSkipped,
+      // Where analyser() reads: always before the volume stage (see tapCompensator).
+      analyserTap: 'pre-volume',
       settings: { gapless: dsp.gapless, crossfadeS: dsp.crossfadeS, replayGain: { ...dsp.replayGain } },
     };
   }
 
+  /** True when the volume is applied before the tap on the current route (see tapCompensator). */
+  function volumeBeforeTap() {
+    // R2 sets the element's volume; Chrome applies it before a
+    // MediaElementAudioSourceNode, so the R2 graph is post-volume too.
+    return mode === 'r1' || mode === 'r2' || mode === 'r3' || mode === 'lane';
+  }
+
+  /** Set the compensator to 1 / volume, so the analysers read the pre-volume level. */
+  function applyTapCompensation() {
+    if (!tapCompensator) return;
+    const volume = laneMutedFlag ? 0 : laneVolumeValue;
+    // Below -80 dB the picture is noise either way; at 0 nothing is left to undo.
+    const value = volumeBeforeTap() && volume > 1e-4 ? 1 / volume : 1;
+    const param = tapCompensator.gain;
+    try { param.setTargetAtTime(value, tapCompensator.context.currentTime, 0.01); } catch { param.value = value; }
+  }
+
   function disposeAnalyser() {
+    try { tapCompensator?.disconnect(); } catch {}
+    tapCompensator = null;
     try { analyser?.disconnect(); } catch {}
     try { splitter?.disconnect(); } catch {}
     for (const node of channelAnalysers ?? []) { try { node.disconnect(); } catch {} }
@@ -1119,12 +1179,14 @@ export function createNakliAmpEngine({
    * this eventually stops playback outright rather than merely wasting memory.
    */
   function releaseSoftware() {
+    if (!software) return;
+    if (software.streamed) releaseStream(software);
     stopSoftwareSource();
-    try { software?.gain?.disconnect(); } catch {}
-    if (software?.context) dropChain(software.context);
+    try { software.gain?.disconnect(); } catch {}
+    if (software.context) dropChain(software.context);
     // `close()` is async and nothing waits for it: this is teardown, and a
     // context that refuses to close is not a reason to fail the next load.
-    try { software?.context?.close?.()?.catch?.(() => {}); } catch {}
+    try { software.context?.close?.()?.catch?.(() => {}); } catch {}
     software = null;
   }
 
@@ -1159,8 +1221,161 @@ export function createNakliAmpEngine({
     };
   }
 
+  /**
+   * The R3 graph for a streamed track: the same context and gain as a decoded
+   * buffer, fed by AudioBufferSourceNodes scheduled back to back.
+   *
+   * Memory held, by construction: at most STREAM_AHEAD_S seconds of scheduled
+   * PCM plus the one chunk being decoded (about half a second), at the
+   * context's rate. At 48 kHz stereo that is under 1.5 MB of Float32, against
+   * about 850 MB for a whole five-minute DSD64 track at 352.8 kHz.
+   */
+  function streamedPlayback(context, stream, name, size, container, decoderName) {
+    const gain = context.createGain();
+    const chained = connectOutput(context, gain);
+    return {
+      context, gain, chained,
+      buffer: null,
+      source: null,
+      streamed: true,
+      stream,
+      sources: new Set(),
+      generation: 0,
+      timer: null,
+      pumping: null,
+      anchor: null, // { mediaS, ctxT }: media time mediaS plays at context time ctxT
+      scheduledEndS: 0,
+      nextTime: 0,
+      streamEnded: false,
+      name, size, container,
+      decoderName,
+      offsetS: 0,
+      startedAt: 0,
+      rate: speed,
+      playing: false,
+      volume: 1,
+      muted: false,
+      durationS: stream.durationS,
+      sampleRate: stream.sampleRate,
+      channels: stream.channelCount,
+    };
+  }
+
+  /**
+   * Stop a streamed track and close its decode stream, which frees the
+   * demuxer, decoder, resampler and reader device. The close queues behind any
+   * read in flight, so nothing waits for it here.
+   */
+  function releaseStream(track) {
+    haltStreamed(track);
+    track.stream.close().catch(() => {});
+  }
+
+  /** Stop every scheduled source and cancel the pump; the stream stays open. */
+  function haltStreamed(track) {
+    track.generation += 1;
+    if (track.timer) { clearInterval(track.timer); track.timer = null; }
+    for (const source of track.sources) {
+      source.onended = null;
+      try { source.stop(); } catch {}
+      try { source.disconnect(); } catch {}
+    }
+    track.sources.clear();
+    track.pumping = null;
+  }
+
+  /** Schedule one decoded chunk right after the previous one. */
+  function scheduleChunk(track, chunk) {
+    const { context } = track;
+    const rate = track.rate || 1;
+    const now = context.currentTime;
+    if (!track.anchor || track.nextTime < now + 0.01) {
+      // First chunk, or decode fell behind the clock: start again a little
+      // ahead, at this chunk's own position, so the clock stays truthful.
+      track.nextTime = now + STREAM_LEAD_S;
+      track.anchor = { mediaS: chunk.startS, ctxT: track.nextTime };
+    }
+    const buffer = context.createBuffer(chunk.channels.length, chunk.frames, track.sampleRate);
+    for (const [index, channel] of chunk.channels.entries()) buffer.copyToChannel(channel, index);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    if (source.playbackRate) source.playbackRate.value = rate;
+    source.connect(track.gain);
+    const generation = track.generation;
+    source.onended = () => {
+      track.sources.delete(source);
+      if (generation !== track.generation) return;
+      if (track.streamEnded && !track.sources.size) {
+        track.offsetS = track.durationS;
+        track.playing = false;
+        haltStreamed(track);
+        return;
+      }
+      pumpStreamed(track);
+    };
+    source.start(track.nextTime);
+    track.sources.add(source);
+    track.nextTime += chunk.frames / track.sampleRate / rate;
+    track.scheduledEndS = chunk.startS + chunk.frames / track.sampleRate;
+  }
+
+  /** Keep STREAM_AHEAD_S seconds scheduled. One pump at a time per track. */
+  function pumpStreamed(track, { limit = Infinity } = {}) {
+    if (track.pumping) return track.pumping;
+    const generation = track.generation;
+    const run = (async () => {
+      let added = 0;
+      while (generation === track.generation && track.playing && !track.streamEnded && added < limit
+        && (!track.anchor || track.nextTime - track.context.currentTime < STREAM_AHEAD_S)) {
+        const chunk = await track.stream.read();
+        if (generation !== track.generation) return;
+        if (!chunk) {
+          track.streamEnded = true;
+          if (!track.sources.size) { track.offsetS = track.durationS; track.playing = false; haltStreamed(track); }
+          return;
+        }
+        scheduleChunk(track, chunk);
+        added += 1;
+      }
+    })().catch(error => {
+      if (generation === track.generation) {
+        track.offsetS = streamedPosition(track);
+        track.playing = false;
+        haltStreamed(track);
+        recordError(error);
+      }
+    }).finally(() => {
+      if (track.pumping === run) track.pumping = null;
+    });
+    track.pumping = run;
+    return run;
+  }
+
+  /** Start (or restart) a streamed track at its offset: seek the decoder, fill one chunk, then keep pumping. */
+  async function startStreamed(track) {
+    haltStreamed(track);
+    const generation = track.generation;
+    track.anchor = null;
+    track.streamEnded = false;
+    track.scheduledEndS = track.offsetS;
+    track.playing = true;
+    await track.stream.seek(track.offsetS);
+    if (generation !== track.generation) return;
+    await pumpStreamed(track, { limit: 1 });
+    if (generation !== track.generation || !track.playing) return;
+    track.timer = setInterval(() => pumpStreamed(track), STREAM_TICK_MS);
+    pumpStreamed(track);
+  }
+
+  function streamedPosition(track) {
+    if (!track.playing || !track.anchor) return Math.min(track.durationS, track.offsetS);
+    const elapsed = Math.max(0, track.context.currentTime - track.anchor.ctxT) * (track.rate || 1);
+    return Math.min(track.durationS, track.scheduledEndS, track.anchor.mediaS + elapsed);
+  }
+
   function softwarePosition() {
     if (!software) return 0;
+    if (software.streamed) return streamedPosition(software);
     const elapsed = software.playing ? (software.context.currentTime - software.startedAt) * (software.rate || 1) : 0;
     return Math.min(software.durationS, software.offsetS + elapsed);
   }
@@ -1355,6 +1570,8 @@ export function createNakliAmpEngine({
       );
     }
     const file = await localFile(input);
+    const streamer = await streamingDecoder(file);
+    if (streamer) return loadR3Streamed(file, streamer, loadId);
     const bytes = new Uint8Array(await file.arrayBuffer());
 
     let decoded = null;
@@ -1415,6 +1632,68 @@ export function createNakliAmpEngine({
       duration: software.durationS,
       container: decoded.container,
       tracks: [{ type: 'audio', codec: 'pcm', sampleRate: decoded.sampleRate, channels: decoded.channels.length }],
+      path: mode,
+    });
+  }
+
+  /**
+   * The software decoder that will stream `file`, or null when it decodes whole.
+   *
+   * Only the head of the file is read. The first decoder that recognises the
+   * head decides: when it streams this container at this size, the file is
+   * never read whole; otherwise the whole-file ladder runs exactly as before.
+   */
+  async function streamingDecoder(file) {
+    const head = new Uint8Array(await file.slice(0, STREAM_HEAD_BYTES).arrayBuffer());
+    for (const decoder of softwareDecoders) {
+      let container = null;
+      try { container = await decoder.sniff(head); } catch { container = null; }
+      if (!container) continue;
+      const streams = typeof decoder.stream === 'function' && Boolean(decoder.streams?.(container, file.size));
+      return streams ? { decoder, container } : null;
+    }
+    return null;
+  }
+
+  /**
+   * R3, streamed: decode a slice at a time, a few seconds ahead of the clock.
+   * The context is made first because the decoder resamples to its rate.
+   */
+  async function loadR3Streamed(file, { decoder, container }, loadId) {
+    const context = audioContextFactory();
+    let stream = null;
+    try {
+      stream = await decoder.stream(file, { container, outputRate: context.sampleRate });
+    } catch (error) {
+      try { context.close?.()?.catch?.(() => {}); } catch {}
+      throw error;
+    }
+    if (loadId !== latestLoadId) {
+      stream.close().catch(() => {});
+      try { context.close?.()?.catch?.(() => {}); } catch {}
+      throw new NakliAmpError(
+        'SupersededLoadError',
+        'ERR_NAKLIAMP_LOAD_SUPERSEDED',
+        'A newer track selection replaced this request.',
+      );
+    }
+
+    reel.pause();
+    disposeNative();
+    disposeAnalyser();
+    releaseSoftware();
+    stopLane();
+    software = streamedPlayback(context, stream, file.name, file.size, container, decoder.name);
+    mode = 'r3';
+    status = 'ready';
+    lastError = null;
+    events.emit('track:loaded', { name: file.name, container, codec: 'pcm', path: mode });
+    return structuredClone({
+      name: file.name,
+      size: file.size,
+      duration: software.durationS,
+      container,
+      tracks: [{ type: 'audio', codec: 'pcm', sampleRate: stream.sampleRate, channels: stream.channelCount }],
       path: mode,
     });
   }
@@ -1558,19 +1837,29 @@ export function createNakliAmpEngine({
   }
 
 
+  /** Play on R3: a decoded buffer from its offset, or a stream restarted at it. */
+  async function playSoftware() {
+    if (software.context.state === 'suspended') await software.context.resume();
+    if (software.streamed) {
+      if (software.offsetS >= software.durationS) software.offsetS = 0;
+      await startStreamed(software);
+      return;
+    }
+    stopSoftwareSource();
+    const source = software.context.createBufferSource();
+    source.buffer = software.buffer;
+    if (source.playbackRate) source.playbackRate.value = software.rate || 1;
+    source.connect(software.gain);
+    source.onended = () => { if (software?.playing) software.playing = false; };
+    source.start(0, Math.min(software.offsetS, software.durationS));
+    software.source = source;
+    software.startedAt = software.context.currentTime;
+    software.playing = true;
+  }
+
   async function play() {
     if (mode === 'r3' && software) {
-      if (software.context.state === 'suspended') await software.context.resume();
-      stopSoftwareSource();
-      const source = software.context.createBufferSource();
-      source.buffer = software.buffer;
-      if (source.playbackRate) source.playbackRate.value = software.rate || 1;
-      source.connect(software.gain);
-      source.onended = () => { if (software?.playing) software.playing = false; };
-      source.start(0, Math.min(software.offsetS, software.durationS));
-      software.source = source;
-      software.startedAt = software.context.currentTime;
-      software.playing = true;
+      await playSoftware();
     } else if (mode === 'lane' && lane) {
       if (lane.context.state === 'suspended') await lane.context.resume();
       lane.lane.play();
@@ -1586,7 +1875,11 @@ export function createNakliAmpEngine({
   }
 
   function pause() {
-    if (mode === 'r3' && software) {
+    if (mode === 'r3' && software?.streamed) {
+      software.offsetS = softwarePosition();
+      software.playing = false;
+      haltStreamed(software);
+    } else if (mode === 'r3' && software) {
       software.offsetS = softwarePosition();
       software.playing = false;
       stopSoftwareSource();
@@ -1598,16 +1891,23 @@ export function createNakliAmpEngine({
     events.emit('transport:pause', { positionS: state().clock.positionS, path: mode });
   }
 
+  /** Seek on R3. A streamed track restarts its stream there; a buffer replays from there. */
+  async function seekSoftware(next) {
+    const wasPlaying = software.playing;
+    if (software.streamed) haltStreamed(software);
+    else stopSoftwareSource();
+    software.offsetS = next;
+    software.playing = false;
+    if (!wasPlaying) return;
+    if (software.streamed) await startStreamed(software);
+    else await play();
+  }
+
   async function seek(positionS) {
     const duration = state().media.duration;
     const next = Math.max(0, Math.min(Number.isFinite(duration) ? duration : Infinity, Number(positionS) || 0));
-    if (mode === 'r3' && software) {
-      const wasPlaying = software.playing;
-      stopSoftwareSource();
-      software.offsetS = next;
-      software.playing = false;
-      if (wasPlaying) await play();
-    } else if (mode === 'lane' && lane) lane.lane.seek(next);
+    if (mode === 'r3' && software) await seekSoftware(next);
+    else if (mode === 'lane' && lane) lane.lane.seek(next);
     else if (mode === 'r1') {
       await reel.seek(next);
       spliceR1();
@@ -1627,6 +1927,7 @@ export function createNakliAmpEngine({
     if (software) { software.volume = next; applySoftwareGain(); }
     laneVolumeValue = next;
     applyLaneVolume();
+    applyTapCompensation();
   }
 
   function applyLaneVolume() {
@@ -1642,6 +1943,7 @@ export function createNakliAmpEngine({
     if (software) { software.muted = next; applySoftwareGain(); }
     laneMutedFlag = next;
     applyLaneVolume();
+    applyTapCompensation();
   }
 
   function state() {
@@ -1758,7 +2060,9 @@ export function createNakliAmpEngine({
       honesty: {
         container: software.container,
         codec: 'pcm',
-        decode: `software decode (${software.decoderName})`,
+        decode: software.streamed
+          ? `software decode, streamed (${software.decoderName})`
+          : `software decode (${software.decoderName})`,
         output: 'Web Audio',
         gapless: false,
         localOnly: true,

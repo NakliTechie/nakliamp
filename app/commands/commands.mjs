@@ -93,6 +93,9 @@ const RAW = [
   { name: 'player.status', group: 'player', scope: 'read', label: 'Player status',
     description: 'What is playing: track id, title, artist, album, position and duration in seconds, playing or paused, volume, muted, shuffle, repeat, and the decoder route.',
     input: obj() },
+  { name: 'player.snapshot', group: 'player', scope: 'read', label: 'Runtime snapshot',
+    description: 'The whole runtime state in one record, shaped after cliamp\'s IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.',
+    input: obj() },
 
   // ----------------------------------------------------------------- queue ----
   { name: 'queue.read', group: 'queue', scope: 'read', label: 'Read queue',
@@ -206,6 +209,12 @@ const RAW = [
   { name: 'visualiser.full', group: 'visualiser', scope: 'reversible', label: 'Full-window visualiser',
     description: 'Show the visualiser over the whole window, or leave it. Without `on` it toggles.',
     input: obj({ on: bool('true enters full window') }), keys: [{ key: 'Shift+V' }] },
+  { name: 'visualiser.picker', group: 'visualiser', scope: 'read', label: 'Visualiser picker',
+    description: 'Open the visualiser picker, where every mode draws live in a small tile, or close it. Without `open` it toggles.',
+    input: obj({ open: bool('true opens, false closes') }), keys: [{ key: 'Alt+V' }] },
+  { name: 'visualiser.link_volume', group: 'visualiser', scope: 'reversible', label: 'Link visualiser to volume',
+    description: 'Scale the visualiser\'s input by the current volume, so a quiet player draws a quiet picture. Without `on` it toggles. Milkdrop reads the audio graph itself and is not scaled.',
+    input: obj({ on: bool('true links, false unlinks') }) },
 
   // ------------------------------------------------------------------ view ----
   { name: 'view.open', group: 'view', scope: 'read', label: 'Open view',
@@ -216,6 +225,7 @@ const RAW = [
       { key: '/', input: { view: 'search' }, label: 'Search' },
       { key: 'Y', input: { view: 'lyrics' }, label: 'Lyrics' },
       { key: 'I', input: { view: 'inspector' }, label: 'Track inspector' },
+      { key: 'U', input: { view: 'queue' }, label: 'Queue (up next)' },
     ] },
   { name: 'view.close', group: 'view', scope: 'read', label: 'Close',
     description: 'Leave the full-window visualiser, or close the open overlay or dialog.', input: obj(), keys: [{ key: 'Escape' }] },

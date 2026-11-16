@@ -50,50 +50,83 @@ button{color:inherit}
 button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto auto auto}
-.topbar{min-height:62px;padding:8px clamp(14px,4vw,54px);display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--glass);backdrop-filter:blur(18px)}
+.topbar{min-height:58px;padding:8px clamp(14px,4vw,54px);display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--panel)}
 .brand{font-family:var(--display);font-size:20px;font-weight:900;letter-spacing:-.04em}.brand em{font-style:normal;color:var(--accent)}
-.version{font:10px var(--mono);color:var(--faint);border:1px solid var(--line);padding:3px 7px;border-radius:999px}
-.path-chip{font:10px var(--mono);letter-spacing:.04em;color:var(--good);border:1px solid color-mix(in srgb,var(--good) 36%,var(--line));padding:5px 9px;border-radius:999px}
+.version{font:inherit;color:inherit}
+.path-chip{display:inline-block;font:11px var(--mono);letter-spacing:.02em;color:var(--good);margin:0 0 8px}
 .path-chip:empty{display:none}
-.top-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
-.chip-btn{min-height:32px;padding:4px 11px;border:1px solid var(--line);border-radius:999px;background:var(--panel);cursor:pointer;font:11px var(--mono);color:var(--muted)}
+.top-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chip-btn{min-height:34px;padding:5px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);cursor:pointer;font:500 13px/1.2 var(--body);color:var(--muted)}
 .chip-btn:hover{border-color:var(--accent);color:var(--text)}
 .chip-btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 .chip-btn[hidden]{display:none}
+.narrow-only{display:none}
+/* Tools menu: a button and a list of commands, not a native select */
+.menu-wrap{position:relative}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:70;min-width:230px;max-height:min(70vh,520px);overflow-y:auto;padding:5px;border:1px solid var(--line);border-radius:11px;background:var(--panel);box-shadow:0 18px 50px var(--shadow)}
+.menu[hidden]{display:none}
+.menu [role=menuitem]{display:block;width:100%;min-height:36px;text-align:left;padding:7px 11px;border:0;border-radius:7px;background:none;cursor:pointer;font:14px var(--body);color:var(--text)}
+.menu [role=menuitem]:hover,.menu [role=menuitem]:focus-visible{background:var(--panel-2);outline:none}
+.menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+.menu .narrow-only{display:none}
 main{min-height:0;display:grid;place-items:center;padding:clamp(18px,5vw,64px)}
 .view{display:none;width:100%}.view.on{display:block}
-.empty{max-width:720px;margin:auto;text-align:center}
+#empty{max-width:720px;margin:auto;text-align:center}
 .record-mark{width:92px;height:92px;margin:0 auto 25px;border-radius:50%;position:relative;border:1px solid #55442f;background:
   radial-gradient(circle,#161310 0 8%,#e0a24a 9% 14%,#17130f 15% 20%,#35291e 21% 23%,#17130f 24% 36%,#2f251c 37% 39%,#17130f 40% 55%,#2f251c 56% 58%,#17130f 59% 100%);
   box-shadow:0 22px 60px var(--shadow)}
-.empty h1{font-family:var(--display);font-size:clamp(32px,6vw,58px);line-height:1;letter-spacing:-.055em;margin:0 0 13px}
-.empty .lede{max-width:520px;margin:0 auto;color:var(--muted);font-size:16px;line-height:1.6}
+#empty h1{font-family:var(--display);font-size:clamp(32px,6vw,58px);line-height:1;letter-spacing:-.055em;margin:0 0 13px}
+#empty .lede{max-width:520px;margin:0 auto;color:var(--muted);font-size:16px;line-height:1.6}
 .drop{max-width:640px;margin:34px auto 0;padding:28px;border:1px dashed var(--line);border-radius:18px;background:var(--panel);transition:border-color .18s,background .18s,transform .18s}
 .drop.drag{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--panel));transform:translateY(-2px)}
 .drop p{margin:0 0 18px;color:var(--muted)}
-.actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.drop .actions,.lib-welcome .actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
 .btn{min-height:42px;border:1px solid var(--line);border-radius:10px;padding:9px 16px;background:var(--panel-2);cursor:pointer;color:var(--text)}
 .btn:hover{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:750}
 .btn[hidden]{display:none}
 .fine{margin-top:18px;color:var(--faint);font:10px/1.7 var(--mono);letter-spacing:.02em}
-.now{max-width:1040px;margin:auto}
-.player-grid{display:grid;grid-template-columns:minmax(220px,390px) minmax(0,1fr);gap:clamp(24px,6vw,86px);align-items:center}
-.art{aspect-ratio:1;border:1px solid var(--line);border-radius:24px;position:relative;overflow:hidden;background:
-  linear-gradient(145deg,rgba(245,190,100,.86),rgba(140,75,34,.95) 45%,rgba(42,28,19,.98));box-shadow:0 35px 90px -38px rgba(224,162,74,.58)}
-.art:before{content:"";position:absolute;width:72%;height:72%;border-radius:50%;left:14%;top:14%;background:repeating-radial-gradient(circle,#15120f 0 3px,#282019 4px 6px);box-shadow:0 12px 40px rgba(0,0,0,.42)}
-.art:after{content:"";position:absolute;width:14%;height:14%;border-radius:50%;left:43%;top:43%;background:#e0a24a;border:7px solid #1b1612}
+.now{max-width:1120px;margin:0 auto}
+.player-grid{display:grid;grid-template-columns:minmax(260px,480px) minmax(0,1fr);gap:clamp(24px,5vw,64px);align-items:start}
+/* The stage: the cover or the visualiser, one click apart (Now playing's main surface) */
+.stage-col{display:grid;gap:10px;min-width:0}
+.stage{position:relative;aspect-ratio:1;border-radius:18px;overflow:hidden;border:1px solid var(--line);background:#100d0a}
+.cover-art{position:absolute;inset:0;overflow:hidden;background:
+  linear-gradient(145deg,rgba(245,190,100,.86),rgba(140,75,34,.95) 45%,rgba(42,28,19,.98))}
+.cover-art:before{content:"";position:absolute;width:72%;height:72%;border-radius:50%;left:14%;top:14%;background:repeating-radial-gradient(circle,#15120f 0 3px,#282019 4px 6px);box-shadow:0 12px 40px rgba(0,0,0,.42)}
+.cover-art:after{content:"";position:absolute;width:14%;height:14%;border-radius:50%;left:43%;top:43%;background:#e0a24a;border:7px solid #1b1612}
+.vis-slot-now{position:absolute;inset:0;display:none}
+.stage[data-show="vis"]:not(.idle) .vis-slot-now{display:block}
+.stage[data-show="vis"]:not(.idle) .cover-art{visibility:hidden}
+.stage-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--panel)}
+.seg button{min-height:34px;padding:5px 12px;border:0;background:none;cursor:pointer;font:500 13px var(--body);color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--panel-2);color:var(--accent)}
+.stage-bar .vis-pick{max-width:150px}
+.stage-bar .chip-btn[hidden],.stage-bar .vis-pick[hidden]{display:none}
 #art-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2}
 #art-img[hidden],#pb-img[hidden]{display:none}
 #pb-img{width:100%;height:100%;object-fit:cover;border-radius:8px}
 .pb-art:has(#pb-img:not([hidden])) #pb-letter{display:none}
-.art:has(#art-img:not([hidden])) .art-letter{display:none}
+.cover-art:has(#art-img:not([hidden])) .art-letter{display:none}
 .art-letter{position:absolute;inset:auto 20px 18px;z-index:1;font-family:var(--display);font-weight:900;font-size:clamp(34px,6vw,70px);line-height:.8;color:rgba(255,245,225,.92);text-shadow:0 3px 22px #2d180c}
 .eyebrow{font:10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:12px}
 .track-name{font-family:var(--display);font-size:clamp(27px,4vw,45px);line-height:1.05;letter-spacing:-.045em;margin:0;overflow-wrap:anywhere}
 .track-meta{color:var(--muted);margin:11px 0 20px;font-size:14px}
-.honesty{display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);font:10px var(--mono);color:var(--muted)}
+.honesty{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font:11px/1.6 var(--mono);color:var(--muted)}
 .honesty .arrow{color:var(--faint)}.honesty .active{color:var(--good)}.honesty .warning{color:var(--warn)}
-.now-tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+/* Playback details: the honesty strip, one click away rather than the main content */
+.now-details{margin-top:18px;border-top:1px solid var(--line);padding-top:10px}
+.now-details summary{cursor:pointer;min-height:32px;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;list-style:none}
+.now-details summary::-webkit-details-marker{display:none}
+.now-details summary:before{content:"▸";color:var(--faint);transition:transform .15s}
+.now-details[open] summary:before{transform:rotate(90deg)}
+.now-details summary:hover{color:var(--text)}
+.details-route{font:11px var(--mono);color:var(--faint)}
+.details-route:not(:empty):before{content:"· "}
+.now-details .detail-body{padding:8px 0 2px}
+.now-details .detail-note{margin:8px 0 0;font-size:12px;color:var(--faint)}
+.now-tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
 .now-tools .btn{min-height:36px;padding:6px 12px;font-size:13px}
 .now-tools .btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 .lyrics-pane{margin-top:28px;border-top:1px solid var(--line);padding-top:18px;min-height:0}
@@ -104,13 +137,15 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 .round:disabled{opacity:.45;cursor:default}
 .volume-wrap{display:flex;align-items:center;gap:8px;flex:1;max-width:170px;color:var(--muted)}
 footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:10px 20px;text-align:center;color:var(--faint);font:10px/1.5 var(--mono)}
-.toast{position:fixed;right:22px;bottom:84px;max-width:min(390px,calc(100vw - 32px));padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 18px 50px var(--shadow);color:var(--text);font-size:13px;z-index:60}
+.toast{position:fixed;right:22px;bottom:var(--toast-bottom,84px);max-width:min(390px,calc(100vw - 32px));padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 18px 50px var(--shadow);color:var(--text);font-size:13px;z-index:60}
 .toast[hidden]{display:none}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+main:has(> .library.on),main:has(> .queue-view.on),main:has(> .now.on){place-items:start center}
 
 /* Library */
-.library{max-width:1080px;margin:auto}
+.library{max-width:1080px;margin:0 auto}
 .lib-tabs{display:flex;gap:6px;margin:0 0 14px;flex-wrap:wrap}
+.lib-tabs[hidden]{display:none}
 .lib-tabs button{min-height:34px;padding:5px 14px;border:1px solid var(--line);border-radius:999px;background:transparent;cursor:pointer;font-size:13px;color:var(--muted)}
 .lib-tabs button[aria-selected="true"]{background:var(--panel-2);border-color:var(--accent);color:var(--accent)}
 .lib-pane[hidden]{display:none}
@@ -119,7 +154,7 @@ footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items
 .lib-search{flex:1;min-width:min(190px,100%);min-height:42px;padding:9px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);max-width:100%}
 .lib-search::placeholder{color:var(--faint)}
 .lib-count{font:10px var(--mono);color:var(--faint);border:1px solid var(--line);padding:5px 9px;border-radius:999px;white-space:nowrap}
-.lib-scan,.loud-line{margin:0 0 14px;font:11px var(--mono);color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.lib-scan,.loud-line{margin:0 0 14px;font:12px var(--body);color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .lib-scan[hidden],.loud-line[hidden]{display:none}
 .loud-line button{min-height:28px;padding:2px 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);cursor:pointer;font:11px var(--mono)}
 .lib-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--panel)}
@@ -127,6 +162,15 @@ footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items
 .lib-list>.lib-group:first-child{border-top:0}
 .lib-row{display:flex;align-items:center;gap:12px;width:100%;padding:9px 16px;border:0;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent);background:none;text-align:left;cursor:pointer;min-width:0}
 .lib-row:hover{background:var(--panel-2)}
+.lib-row.selected,.lib-row:focus-visible{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.lib-row:focus-visible{outline-offset:-2px}
+.lib-welcome{max-width:560px;margin:8vh auto 0;padding:28px;border:1px dashed var(--line);border-radius:18px;background:var(--panel);text-align:center}
+.lib-welcome[hidden]{display:none}
+.lib-welcome h2{font-family:var(--display);font-size:26px;letter-spacing:-.03em;margin:0 0 8px}
+.lib-welcome p{margin:0 0 18px;color:var(--muted);line-height:1.55}
+.lib-scan progress{width:min(260px,100%);height:8px;accent-color:var(--accent)}
+.lib-scan progress[hidden]{display:none}
+.lib-scan.busy{font:13px var(--body);color:var(--text)}
 .lib-row[aria-current="true"]{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .lib-row .no{width:26px;text-align:right;font:11px var(--mono);color:var(--faint);flex:none}
 .lib-row .cover{width:34px;height:34px;border-radius:7px;flex:none;object-fit:cover;background:var(--panel-2);border:1px solid var(--line)}
@@ -139,34 +183,48 @@ footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items
 .row-tools button:hover{border-color:var(--accent);color:var(--accent)}
 .lib-empty{padding:28px 16px;text-align:center;color:var(--muted)}
 .lib-note{margin:14px 0 0;font-size:12px;color:var(--faint)}
-.queue-view{max-width:1080px;margin:auto}
+.queue-view{max-width:1080px;margin:0 auto}
 #lib-browse,#queue-root{width:100%;--nakliamp-list-height:max(320px,calc(100dvh - 300px));--nakliamp-queue-height:max(320px,calc(100dvh - 280px))}
-.queue-view h2{font-family:var(--display);font-size:22px;margin:0 0 14px;letter-spacing:-.03em}
 
-/* Visualiser */
-.vis-wrap{position:relative;flex:0 1 150px;min-width:90px;height:40px;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+
+/* Visualiser. One canvas (#vis in #vis-wrap) moves between three places: the
+   player bar strip, the Now playing stage and the full-window layer. A dark
+   screen in both themes, because the modes draw light on dark. */
+.vis-wrap{position:relative;width:100%;height:100%;background:#100d0a;overflow:hidden}
 .vis-wrap[hidden]{display:none}
 #vis{display:block;width:100%;height:100%}
-.vis-wrap.full{position:fixed;inset:0;z-index:50;flex:none;height:100vh;border-radius:0;border:0;background:#100d0a}
-.vis-wrap.full ~ #vis-full{position:fixed;z-index:51;right:18px;top:18px;background:var(--panel);border-color:var(--accent)}
-.vis-wrap.full #vis{height:100vh}
-.vis-pick{min-height:34px;max-width:120px;padding:4px 7px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:10px var(--mono)}
+.vis-slot-bar{flex:0 1 100px;min-width:72px;height:42px;border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;background:#100d0a}
+.vis-slot-bar:empty{display:none}
+.vis-full-layer{position:fixed;inset:0;z-index:90;background:#100d0a}
+.vis-full-layer[hidden]{display:none}
+.vis-slot-full{position:absolute;inset:0}
+#vis-exit{position:absolute;z-index:1;right:18px;top:18px;min-height:40px;padding:8px 14px;border:1px solid #6b5a44;border-radius:9px;background:rgba(26,22,18,.86);color:#efe8da;font:500 14px var(--body);cursor:pointer}
+#vis-exit:hover,#vis-exit:focus-visible{border-color:#e0a24a}
+html.vis-full{overflow:hidden}
+.vis-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px;margin:0 0 12px}
+.vis-tile{display:flex;flex-direction:column;gap:4px;padding:5px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:10px var(--mono);cursor:pointer;text-align:left}
+.vis-tile:hover,.vis-tile:focus-visible{border-color:var(--accent)}
+.vis-tile[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--panel-2)}
+.vis-tile canvas{display:block;width:100%;height:auto;aspect-ratio:2/1;border-radius:5px;background:#100d0a}
+.vis-tile .vis-tile-note{display:grid;place-items:center;aspect-ratio:2/1;border-radius:5px;background:#100d0a;color:#9d9180}
+.vis-link{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.vis-pick{min-height:34px;max-width:120px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:13px var(--body)}
 
 /* View tabs */
 .views{display:flex;gap:6px;flex-wrap:wrap}
-.view-tab{min-height:32px;padding:5px 13px;border:1px solid var(--line);border-radius:999px;background:transparent;cursor:pointer;font:11px var(--mono);letter-spacing:.03em;color:var(--muted)}
+.view-tab{min-height:34px;padding:5px 14px;border:1px solid transparent;border-radius:9px;background:transparent;cursor:pointer;font:500 14px var(--body);color:var(--muted)}
 .view-tab:hover{border-color:var(--accent);color:var(--text)}
 .view-tab.on{background:var(--panel-2);border-color:var(--accent);color:var(--accent)}
 .view-tab[hidden]{display:none}
 
 /* The persistent player bar */
-.playerbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px clamp(12px,3vw,28px);border-top:1px solid var(--line);background:var(--glass);backdrop-filter:blur(18px);position:sticky;bottom:0;z-index:20}
+.playerbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px clamp(12px,3vw,28px);border-top:1px solid var(--line);background:var(--panel);position:sticky;bottom:0;z-index:20}
 .playerbar[hidden]{display:none}
 .pb-art{width:46px;height:46px;flex:none;border-radius:9px;border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;padding:0;
   background:linear-gradient(145deg,rgba(245,190,100,.8),rgba(140,75,34,.92) 50%,rgba(42,28,19,.98));
   font-family:var(--display);font-weight:900;font-size:19px;color:rgba(255,245,225,.94)}
 .pb-art:hover{border-color:var(--accent)}
-.pb-track{min-width:0;flex:1 1 150px;max-width:290px}
+.pb-track{min-width:0;flex:1 1 130px;max-width:290px}
 .pb-track b{display:block;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pb-track span{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pb-transport{display:flex;align-items:center;gap:6px;flex:none}
@@ -174,11 +232,11 @@ footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items
 .pb-transport .round.play{width:46px;height:46px;font-size:16px}
 .pb-modes{display:flex;gap:4px;flex:none;flex-wrap:wrap;align-items:center}
 .pb-modes .vis-pick{max-width:76px}
+#output-device{max-width:130px}
 .volume-db{font:10px var(--mono);color:var(--muted);min-width:52px;text-align:right;white-space:nowrap}
 .timer-chip[hidden]{display:none}
-.tools-pick{min-height:32px;max-width:120px;padding:4px 7px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);font:11px var(--mono)}
 .pb-modes .chip-btn{min-height:30px;padding:3px 9px}
-.pb-time{display:grid;grid-template-columns:42px 1fr 42px;gap:9px;align-items:center;flex:1 1 200px;color:var(--faint);font:10px var(--mono)}
+.pb-time{display:grid;grid-template-columns:42px 1fr 42px;gap:9px;align-items:center;flex:1 1 120px;color:var(--faint);font:10px var(--mono)}
 .playerbar .volume-wrap{margin-left:0;flex:0 1 130px}
 
 /* A refusal is a banner about one file, not a screen that replaces everything */
@@ -191,33 +249,63 @@ footer{min-height:44px;border-top:1px solid var(--line);display:flex;align-items
 .refusal-body p{margin:3px 0 0;color:var(--muted);font-size:13px}
 .refusal-promise{display:block;margin-top:3px;font:10px var(--mono);color:var(--faint)}
 @media(max-width:760px){
-  .player-grid{grid-template-columns:1fr}.art{max-width:310px;width:74vw;margin:auto}.track{text-align:center}
-  .honesty,.now-tools{justify-content:center}
-  main{padding:22px 14px 40px}
+  .player-grid{grid-template-columns:1fr;gap:18px}
+  .stage-col{width:min(100%,440px);margin:0 auto}
+  .stage{max-height:52dvh;aspect-ratio:auto;height:min(calc(100vw - 28px),52dvh,440px)}
+  main{padding:18px 14px 28px}
   .playerbar{gap:8px}
-  .vis-wrap,.vis-pick{display:none}
   .pb-time{order:5;flex-basis:100%}
   .playerbar .volume-wrap{flex-basis:100px}
-  #open-another{display:none}
 }
-@media(max-width:420px){
-  .topbar{padding:8px 12px;gap:8px}
-  .top-actions{margin-left:0}
-  .pb-track{flex-basis:100%;max-width:none;order:-1}
-  .pb-art{display:none}
+/* Phones: one header row, the views in a bottom tab bar, a one-row player bar
+   that expands in Now playing, and everything else in the Menu. */
+@media(max-width:600px){
+  .topbar{min-height:52px;padding:6px 12px;gap:8px;flex-wrap:nowrap}
+  .wide-only{display:none}
+  .narrow-only{display:inline}
+  .menu [role=menuitem].narrow-only,.menu hr.narrow-only{display:block}
+  .tools-label{display:none}
+  .views{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;gap:0;padding:4px 6px calc(4px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--panel)}
+  .view-tab{flex:1;min-height:48px;border-radius:9px}
+  .view-tab.on{border-color:transparent}
+  .shell{padding-bottom:calc(58px + env(safe-area-inset-bottom))}
+  .playerbar{bottom:calc(58px + env(safe-area-inset-bottom));flex-wrap:nowrap;padding:8px 12px;gap:10px}
+  .pb-art{width:44px;height:44px}
+  .pb-track{flex:1 1 auto;max-width:none}
+  .pb-transport{gap:4px}
+  #prev,#back,#forward,.pb-time,.pb-modes,.volume-wrap,#output-device,.vis-slot-bar{display:none}
+  html[data-view="now"] .playerbar{flex-wrap:wrap}
+  html[data-view="now"] .pb-art,html[data-view="now"] .pb-track{display:none}
+  /* Small enough that the title, which the bar no longer repeats, shows above the controls. */
+  .stage{height:clamp(170px,calc(100dvh - 500px),calc(100vw - 28px))}
+  .stage-bar .vis-pick{max-width:120px}
+  html[data-view="now"] .pb-transport{flex:1 1 100%;justify-content:center;gap:8px}
+  html[data-view="now"] #prev,html[data-view="now"] #back,html[data-view="now"] #forward{display:grid}
+  html[data-view="now"] .pb-time{display:grid;flex-basis:100%}
+  html[data-view="now"] .pb-modes{display:flex;flex:1 1 100%;justify-content:center}
+  .lib-head h2{display:none}
+  .lib-head{gap:8px;margin-bottom:12px}
+  .lib-head .btn{min-height:38px;padding:7px 12px}
+  #lib-browse,#queue-root{--nakliamp-list-height:max(260px,calc(100dvh - 400px));--nakliamp-queue-height:max(260px,calc(100dvh - 330px))}
   .lib-row{padding:9px 10px;gap:8px}
   .lib-row .cover{display:none}
+  .menu{position:fixed;left:8px;right:8px;top:56px;min-width:0;max-height:calc(100dvh - 140px)}
+  footer{min-height:36px;padding:6px 12px}
 }
+@media(max-width:600px) and (pointer:fine){html[data-view="now"] .volume-wrap{display:flex;flex:1 1 100%;max-width:none}}
 
 /* Mini player (V6): art, title, transport and seek in a small window */
 html.mini .topbar,html.mini main,html.mini footer{display:none}
-html.mini .shell{grid-template-rows:1fr auto auto}
-html.mini .playerbar{position:static;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"art track" "transport transport" "time time" "exit exit";gap:10px;padding:14px;border-top:0;max-width:420px;margin:0 auto;width:100%}
+html.mini .shell{min-height:0;grid-template-rows:auto;align-content:start;padding-bottom:0}
+html.mini .playerbar{position:static;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"art track" "vis vis" "transport transport" "time time" "exit exit";gap:10px;padding:14px;border:1px solid var(--line);border-radius:14px;max-width:420px;margin:14px auto 0;width:calc(100% - 28px);align-self:start}
 html.mini .playerbar .pb-art{display:grid;grid-area:art;width:64px;height:64px}
-html.mini .pb-track{grid-area:track;max-width:none;align-self:center}
+html.mini .pb-track{grid-area:track;max-width:none;align-self:center;text-align:left}
 html.mini .pb-transport{grid-area:transport;justify-content:center}
-html.mini .pb-time{grid-area:time}
-html.mini .volume-wrap,html.mini .vis-wrap,html.mini .vis-pick,html.mini #vis-full,html.mini #output-device,html.mini #open-another,html.mini .pb-modes{display:none}
+html.mini #prev,html.mini #back,html.mini #forward{display:grid}
+html.mini .pb-time{display:grid;grid-area:time}
+html.mini .vis-slot-bar{display:block;grid-area:vis;width:100%;height:96px;flex:none}
+html.mini .vis-slot-bar:empty{display:none}
+html.mini .volume-wrap,html.mini .vis-pick,html.mini #output-device,html.mini .pb-modes{display:none}
 html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 #mini-exit{display:none}
 </style>
@@ -226,31 +314,39 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 <div class="shell">
   <header class="topbar">
     <div class="brand">Nakli<em>Amp</em></div>
-    <span class="version">v0.3.0-m2</span>
     <nav class="views" aria-label="Views">
       <button class="view-tab on" id="tab-library" type="button" data-view="library" aria-current="page">Library</button>
       <button class="view-tab" id="tab-queue" type="button" data-view="queue">Queue</button>
       <button class="view-tab" id="tab-now" type="button" data-view="now" hidden>Now playing</button>
     </nav>
-    <span class="path-chip" id="path-chip"></span>
     <div class="top-actions">
-      <button class="chip-btn" id="open-sound" type="button" aria-label="Sound: equaliser, ReplayGain, crossfade and gapless">Sound</button>
-      <button class="chip-btn" id="open-ai" type="button" aria-label="Make a playlist from a description">AI playlist</button>
-      <select class="tools-pick" id="tools-menu" aria-label="More tools">
-        <option value="">Tools</option>
-        <option value="commands">Command bar (Ctrl+K)</option>
-        <option value="music-folders">Music folders</option>
-        <option value="duplicates">Duplicates</option>
-        <option value="rename">Rename and replace</option>
-        <option value="sleep">Sleep timer</option>
-        <option value="similar">More like this</option>
-        <option value="genre-fill">Fill missing genres</option>
-        <option value="network">Network (off by default)</option>
-        <option value="skins">Classic skin face (.wsz)</option>
-      </select>
-      <button class="chip-btn" id="theme-toggle" type="button" aria-label="Theme">Theme: light</button>
-      <button class="chip-btn" id="mini-toggle" type="button" aria-label="Mini player" aria-pressed="false">Mini</button>
-      <button class="chip-btn" id="open-keymap" type="button" aria-label="Keyboard shortcuts">?</button>
+      <button class="chip-btn wide-only" id="open-sound" type="button" aria-label="Sound: equaliser, ReplayGain, crossfade and gapless">Sound</button>
+      <button class="chip-btn wide-only" id="open-ai" type="button" aria-label="Make a playlist from a description">AI playlist</button>
+      <div class="menu-wrap">
+        <button class="chip-btn" id="tools-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="tools-menu" aria-label="Tools and settings menu"><span class="tools-label">Tools</span><span class="narrow-only">Menu</span> ▾</button>
+        <div class="menu" id="tools-menu" role="menu" aria-label="Tools and settings" hidden>
+          <button type="button" role="menuitem" class="narrow-only" data-view="sound">Sound: equaliser and gain</button>
+          <button type="button" role="menuitem" class="narrow-only" data-view="ai">AI playlist</button>
+          <hr class="narrow-only">
+          <button type="button" role="menuitem" data-act="file" id="open-another">Open an audio file</button>
+          <button type="button" role="menuitem" data-view="commands">Command bar (Ctrl+K)</button>
+          <button type="button" role="menuitem" data-view="music-folders">Music folders</button>
+          <button type="button" role="menuitem" data-view="duplicates">Duplicates</button>
+          <button type="button" role="menuitem" data-view="rename">Rename and replace</button>
+          <button type="button" role="menuitem" data-view="sleep">Sleep timer</button>
+          <button type="button" role="menuitem" data-view="similar">More like this</button>
+          <button type="button" role="menuitem" data-view="genre-fill">Fill missing genres</button>
+          <button type="button" role="menuitem" data-view="network">Network (off by default)</button>
+          <button type="button" role="menuitem" data-view="skins">Classic skin (.wsz)</button>
+          <hr class="narrow-only">
+          <button type="button" role="menuitem" class="narrow-only" data-act="theme" id="theme-item">Theme: light</button>
+          <button type="button" role="menuitem" class="narrow-only" data-act="mini">Mini player</button>
+          <button type="button" role="menuitem" class="narrow-only" data-view="keymap">Keyboard shortcuts</button>
+        </div>
+      </div>
+      <button class="chip-btn wide-only" id="theme-toggle" type="button" aria-label="Theme">Theme: light</button>
+      <button class="chip-btn wide-only" id="mini-toggle" type="button" aria-label="Mini player" aria-pressed="false">Mini</button>
+      <button class="chip-btn wide-only" id="open-keymap" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
     </div>
   </header>
 
@@ -272,13 +368,21 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 
     <!-- The library. The default view once a folder exists; browsing never stops playback. -->
     <section class="view library" id="library" aria-labelledby="library-title">
-      <div class="lib-tabs" role="tablist" aria-label="Library views">
-        <button type="button" role="tab" id="lib-tab-tracks" aria-selected="true" aria-controls="lib-tracks">Tracks</button>
-        <button type="button" role="tab" id="lib-tab-browse" aria-selected="false" aria-controls="lib-browse" tabindex="-1">Browse</button>
+      <div class="lib-welcome" id="lib-welcome" hidden>
+        <h2>Add your music</h2>
+        <p>Choose the folder that holds your music. NakliAmp reads it on this device and lists it here by album, artist and genre.</p>
+        <div class="actions">
+          <button class="btn primary" id="welcome-folder" type="button">Open a music folder</button>
+          <button class="btn" id="welcome-file" type="button">Open a single file</button>
+        </div>
       </div>
-      <p class="lib-scan" id="lib-scan" role="status" hidden></p>
+      <div class="lib-tabs" role="tablist" aria-label="Library views">
+        <button type="button" role="tab" id="lib-tab-browse" aria-selected="true" aria-controls="lib-browse">Browse</button>
+        <button type="button" role="tab" id="lib-tab-tracks" aria-selected="false" aria-controls="lib-tracks" tabindex="-1">Files</button>
+      </div>
+      <p class="lib-scan" id="lib-scan" role="status" hidden><span id="lib-scan-text"></span><progress id="lib-scan-bar" aria-label="Indexing your music folder" hidden></progress></p>
       <p class="loud-line" id="loud-line" hidden><span id="loud-text"></span><button type="button" id="loud-toggle">Pause</button></p>
-      <div class="lib-pane" id="lib-tracks" role="tabpanel" aria-labelledby="lib-tab-tracks">
+      <div class="lib-pane" id="lib-tracks" role="tabpanel" aria-labelledby="lib-tab-tracks" hidden>
         <div class="lib-head">
           <h2 id="library-title">Library</h2>
           <input class="lib-search" id="lib-search" type="search" placeholder="Search your library" aria-label="Search your library" autocomplete="off">
@@ -295,30 +399,51 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
         </div>
         <ul class="lib-list" id="lib-list" aria-label="Tracks"></ul>
       </div>
-      <div class="lib-pane" id="lib-browse" role="tabpanel" aria-labelledby="lib-tab-browse" hidden></div>
+      <div class="lib-pane" id="lib-browse" role="tabpanel" aria-labelledby="lib-tab-browse"></div>
       <p class="lib-note">Your folder is read on your device. Nothing is uploaded, and the index never leaves this browser.</p>
     </section>
 
     <!-- The play queue, separate from whatever the library shows (P5). -->
     <section class="view queue-view" id="queue" aria-labelledby="queue-title">
-      <h2 id="queue-title">Queue</h2>
+      <h2 id="queue-title" class="sr-only">Queue</h2>
       <div id="queue-root"></div>
     </section>
 
     <!-- Now playing. A place you choose to go, not where you are dumped. -->
     <section class="view now" id="now" aria-labelledby="track-name">
       <div class="player-grid">
-        <div class="art" aria-hidden="true"><img id="art-img" alt="" hidden><span class="art-letter" id="art-letter">N</span></div>
+        <div class="stage-col">
+          <div class="stage" id="stage" data-show="vis">
+            <div class="cover-art" aria-hidden="true"><img id="art-img" alt="" hidden><span class="art-letter" id="art-letter">N</span></div>
+            <div class="vis-slot-now" id="vis-slot-now"></div>
+          </div>
+          <div class="stage-bar" role="group" aria-label="Cover and visualiser">
+            <div class="seg" role="group" aria-label="Show">
+              <button type="button" id="stage-cover" aria-pressed="false">Cover</button>
+              <button type="button" id="stage-vis" aria-pressed="true">Visualiser</button>
+            </div>
+            <select id="vis-mode" class="vis-pick" aria-label="Visualiser mode"></select>
+            <button class="chip-btn" id="vis-picker" type="button" title="Every visualiser with a live preview (Alt+V)">Visualisers</button>
+            <button class="chip-btn" id="vis-full" type="button" aria-pressed="false" aria-label="Full-window visualiser" title="Full window (Shift+V)">Full window</button>
+          </div>
+        </div>
         <div class="track">
           <div class="eyebrow" data-t="player.now">Now playing locally</div>
           <h1 class="track-name" id="track-name">Untitled track</h1>
           <p class="track-meta" id="track-meta">—</p>
-          <div class="honesty" id="honesty" aria-label="Playback path"></div>
           <div class="now-tools">
             <button class="btn" id="now-fav" type="button" aria-pressed="false">Favourite</button>
             <button class="btn" id="now-inspect" type="button">Track details</button>
             <button class="btn" id="now-tags" type="button">Edit tags</button>
           </div>
+          <details class="now-details" id="now-details">
+            <summary>Playback details <span class="details-route" id="details-route"></span></summary>
+            <div class="detail-body">
+              <span class="path-chip" id="path-chip"></span>
+              <div class="honesty" id="honesty" aria-label="Playback path"></div>
+              <p class="detail-note">How this track plays: container, codec, decoder, output and sound processing, as the engine reports them.</p>
+            </div>
+          </details>
         </div>
       </div>
       <div class="lyrics-pane" id="lyrics-root" aria-label="Lyrics"></div>
@@ -353,12 +478,7 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
     </div>
     <label class="volume-wrap"><span aria-hidden="true">◖</span><input id="volume" type="range" min="0" max="1" step="any" value="0.8" aria-label="Volume"><span class="volume-db" id="volume-db" aria-hidden="true"></span></label>
     <select class="vis-pick" id="output-device" aria-label="Output device" hidden></select>
-    <div class="vis-wrap" id="vis-wrap">
-      <canvas id="vis" aria-label="Spectrum visualiser" role="img"></canvas>
-    </div>
-    <select id="vis-mode" class="vis-pick" aria-label="Visualiser mode"></select>
-    <button class="btn" id="vis-full" type="button" title="Full window (Shift+V)" aria-label="Full-window visualiser">⤢</button>
-    <button class="btn" id="open-another" type="button" data-t="action.another">Open another</button>
+    <div class="vis-slot-bar" id="vis-slot-bar" title="Visualiser: click to see it large in Now playing"><div class="vis-wrap" id="vis-wrap"><canvas id="vis" aria-label="Spectrum visualiser" role="img"></canvas></div></div>
     <button class="chip-btn" id="mini-exit" type="button">Full player</button>
   </div>
 
@@ -374,7 +494,14 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
     <button class="btn" id="refusal-dismiss" type="button" aria-label="Dismiss">Dismiss</button>
   </div>
 
-  <footer data-t="privacy">Local playback only · no account · no cookies · no analytics</footer>
+  <footer><span data-t="privacy">Local playback only · no account · no cookies · no analytics</span>&nbsp;·&nbsp;<span class="version">v0.3.0-m2</span></footer>
+</div>
+
+<!-- The full-window visualiser. Outside the shell, so nothing in the page can
+     become its containing block (B1: a backdrop filter on the player bar did). -->
+<div class="vis-full-layer" id="vis-full-layer" role="dialog" aria-label="Full-window visualiser" hidden>
+  <div class="vis-slot-full" id="vis-slot-full"></div>
+  <button id="vis-exit" type="button" title="Exit full window (Shift+V or Esc)">Exit full window</button>
 </div>
 
 <input id="file-input" type="file" accept="audio/*,.mp3,.flac,.m4a,.aac,.ogg,.opus,.wav,.mka,.aiff,.aif,.caf,.au,.wma,.ape" hidden aria-label="Choose an audio file">
@@ -1647,7 +1774,7 @@ html.mini #mini-exit{display:inline-flex;grid-area:exit;justify-self:center}
 <script type="module">
 import { createNakliAmpEngine } from './engine/nakliamp-engine.mjs';
 import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';
-import { createVisualiser } from './app/visualiser/driver.mjs';
+import { createVisualiser, createPreviewGrid } from './app/visualiser/driver.mjs';
 import {
   allTracks, getArt, updateTrackState, compareAlbumOrder, clearLibrary, allPlaylists, allSmartPlaylists,
   setRating, setFavourite, getLoudness, putLoudness, loudnessKey, setMeta,
@@ -1676,6 +1803,7 @@ import { createListenBrainz, createPlayTracker, LB_ORIGIN } from './app/net/list
 import { moreLikeThis } from './app/ai/similar.mjs';
 import { suggestGenres } from './app/ai/genres.mjs';
 import { registerWebMcpTools } from './app/agent/webmcp.mjs';
+import { CHANNEL_NAME, buildSnapshot, createEventPublisher, createChannelBridge, instanceId } from './app/agent/events.mjs';
 import { mountNetworkPanel } from './app/ui/v1x-network.mjs';
 import { mountDuplicates, mountRename, mountFolders } from './app/ui/v1x-library-tools.mjs';
 import { mountSleepTimer } from './app/ui/v1x-timers.mjs';
@@ -1770,15 +1898,25 @@ function paintTheme() {
   const applied = applyTheme(document.documentElement, settings.theme, { hosted: host.hosted(), host: hostTheme });
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || (applied === 'dark' ? '#161310' : '#f6f2ea');
-  const label = { system: host.hosted() ? 'NakliOS' : 'light', light: 'light', dark: 'dark' }[settings.theme];
-  $('#theme-toggle').textContent = `Theme: ${label}`;
-  $('#theme-toggle').setAttribute('aria-label', `Theme: ${label}. Change theme`);
+  // Outside NakliOS 'system' is light, so it is labelled by what shows (minor 1).
+  const label = settings.theme === 'system' && host.hosted() ? 'NakliOS' : applied;
+  for (const id of ['#theme-toggle', '#theme-item']) {
+    $(id).textContent = `Theme: ${label}`;
+    $(id).setAttribute('aria-label', `Theme: ${label}. Change theme`);
+  }
+}
+
+/** The next theme a click gives: light and dark standalone, plus the host theme inside NakliOS. */
+function nextTheme() {
+  if (host.hosted()) return cycle(['light', 'dark', 'system'], settings.theme);
+  return document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
 }
 
 function paintMini() {
   document.documentElement.classList.toggle('mini', settings.miniPlayer);
   $('#mini-toggle').setAttribute('aria-pressed', String(settings.miniPlayer));
   if (settings.miniPlayer) revealPlayer();
+  placeVisualiser();
 }
 
 onSettings((next, before) => {
@@ -1804,6 +1942,7 @@ onSettings((next, before) => {
  */
 function show(view) {
   for (const name of VIEWS) $(`#${name}`).classList.toggle('on', name === view);
+  document.documentElement.dataset.view = view;
   for (const tab of document.querySelectorAll('.view-tab')) {
     const on = tab.dataset.view === view;
     tab.classList.toggle('on', on);
@@ -1811,6 +1950,8 @@ function show(view) {
   }
   if (view === 'queue') ensureQueuePanel();
   if (view === 'now') ensureLyricsPanel();
+  if (view === 'library') showLibraryPane(libraryPane);
+  placeVisualiser();
 }
 
 function currentView() {
@@ -1830,7 +1971,10 @@ for (const tab of document.querySelectorAll('.view-tab')) {
   });
 }
 
-let libraryPane = 'tracks';
+// Browse is the library's main list (M4); Files is the folder index with
+// playlist-file editing. Both follow one click rule: a click selects, a double
+// click or Enter plays.
+let libraryPane = 'browse';
 function showLibraryPane(pane) {
   libraryPane = pane;
   const tracks = pane === 'tracks';
@@ -1841,6 +1985,7 @@ function showLibraryPane(pane) {
     $(id).tabIndex = on ? 0 : -1;
   }
   if (!tracks) ensureBrowsePanel();
+  paintWelcome();
 }
 $('#lib-tab-tracks').addEventListener('click', () => showLibraryPane('tracks'));
 $('#lib-tab-browse').addEventListener('click', () => showLibraryPane('browse'));
@@ -1856,6 +2001,13 @@ document.querySelector('.lib-tabs').addEventListener('keydown', event => {
 
 function toast(message, timeoutMs = 2600) {
   clearTimeout(toastTimer);
+  // Above the player bar (and the phone tab bar), never over its controls (minor 7).
+  const tops = [innerHeight];
+  if (!$('#playerbar').hidden) tops.push($('#playerbar').getBoundingClientRect().top);
+  const tabs = document.querySelector('.views');
+  if (getComputedStyle(tabs).position === 'fixed') tops.push(tabs.getBoundingClientRect().top);
+  const covered = Math.max(0, innerHeight - Math.min(...tops));
+  $('#toast').style.setProperty('--toast-bottom', `${Math.round(covered + 14)}px`);
   $('#toast').textContent = message;
   $('#toast').hidden = false;
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, timeoutMs);
@@ -1863,7 +2015,7 @@ function toast(message, timeoutMs = 2600) {
 
 // ------------------------------------------------------ now playing ----
 
-const PATH_CHIP = { r1: 'R1 · REEL ENGINE', r2: 'R2 · NATIVE PASSTHROUGH', r3: 'R3 · SOFTWARE DECODE', lane: 'GAPLESS LANE' };
+const PATH_CHIP = { r1: 'R1 · NakliAmp engine', r2: 'R2 · browser native audio', r3: 'R3 · software decode', lane: 'Gapless lane' };
 
 function honestyMarkup(state) {
   const parts = [
@@ -1972,6 +2124,7 @@ function renderTrack(state) {
   $('#duration').textContent = formatTime(length);
   $('#seek').max = String(Math.max(0.01, length || 0.01));
   $('#path-chip').textContent = PATH_CHIP[state.path] ?? PATH_CHIP.r2;
+  $('#details-route').textContent = PATH_CHIP[state.path] ?? PATH_CHIP.r2;
   honestyKey = '';
   paintHonesty();
 
@@ -2057,6 +2210,7 @@ function renderClock() {
   if (!idle && !visualiser.running) visualiser.start();
   // Nothing is moving, so nothing needs repainting.
   if (idle && visualiser.running) visualiser.stop();
+  paintStageIdle();
   maybeAdvance(state);
   requestAnimationFrame(renderClock);
 }
@@ -2210,9 +2364,22 @@ function notifyLibrary() {
   for (const fn of libraryListeners) { try { fn(); } catch (error) { console.warn('[nakliamp] library listener failed', error); } }
 }
 
-function releaseArt() {
-  for (const url of artUrls.values()) URL.revokeObjectURL(url);
-  artUrls.clear();
+/**
+ * Revoke only the cover URLs whose art key left the library. Revoking every URL
+ * on each refresh broke covers that visible rows (and Browse's cache) still
+ * showed, which flashed broken-image icons (minor 10).
+ */
+function releaseArt(liveTracks = []) {
+  const live = new Set();
+  for (const track of liveTracks) {
+    if (track.artKey) live.add(track.artKey);
+    if (track.dirArtKey) live.add(track.dirArtKey);
+  }
+  for (const [key, url] of artUrls) {
+    if (live.has(key)) continue;
+    URL.revokeObjectURL(url);
+    artUrls.delete(key);
+  }
 }
 
 /** Embedded art first, then the folder image beside the file (T3). */
@@ -2249,8 +2416,20 @@ function appendEmptyRow(list) {
   const empty = document.createElement('li');
   empty.className = 'lib-empty';
   empty.textContent = libraryTracks.length ? t('library.empty') : t('library.none');
-  if (!libraryTracks.length) reportScan('');
   list.append(empty);
+}
+
+/**
+ * With no music indexed, the library is one welcome card (minors 2 and 13): no
+ * empty tabs, no second copy of the same sentence in the status line.
+ */
+function paintWelcome() {
+  const empty = libraryTracks.length === 0 && !scanning;
+  $('#lib-welcome').hidden = !empty;
+  document.querySelector('.lib-tabs').hidden = empty;
+  $('#lib-tracks').hidden = empty || libraryPane !== 'tracks';
+  $('#lib-browse').hidden = empty || libraryPane !== 'browse';
+  if (empty && $('#lib-scan-text').textContent === t('library.none')) reportScan('');
 }
 
 function paintLibraryHead({ query, visible, source, playlist, missing }) {
@@ -2266,6 +2445,7 @@ function paintLibraryHead({ query, visible, source, playlist, missing }) {
   if (playlist && missing) {
     reportScan(`${playlist.name}: ${missing} of ${playlist.entries.length} entries are not in this folder.`);
   }
+  paintWelcome();
 }
 
 function libraryRow(track, index, playingId, playlist) {
@@ -2363,8 +2543,8 @@ function markPlaying() {
 }
 
 async function refreshLibrary() {
-  releaseArt();
   libraryTracks = await allTracks();
+  releaseArt(libraryTracks);
   byId = new Map(libraryTracks.map(track => [track.id, track]));
   if (playingTrack) playingTrack = byId.get(playingTrack.id) ?? playingTrack;
   await refreshFolders();
@@ -2373,10 +2553,19 @@ async function refreshLibrary() {
   notifyLibrary();
 }
 
-function reportScan(message) {
-  const line = $('#lib-scan');
-  line.hidden = !message;
-  line.textContent = message || '';
+/**
+ * The status line above the library. While a scan runs it carries a progress
+ * bar (minor 6). The bar is indeterminate because the scanner does not count
+ * a folder's files before it reads them, so there is no total to divide by.
+ */
+function reportScan(message, { busy = false } = {}) {
+  // The welcome card already says there is no folder; the line would repeat it.
+  const repeat = message === t('library.none') && !$('#lib-welcome').hidden;
+  const text = repeat ? '' : (message || '');
+  $('#lib-scan').hidden = !text;
+  $('#lib-scan-text').textContent = text;
+  $('#lib-scan-bar').hidden = !busy;
+  $('#lib-scan').classList.toggle('busy', busy);
 }
 
 // ------------------------------------------------------ music folders (L13) ----
@@ -2476,13 +2665,17 @@ function cancelScan() {
 
 async function performScan(row) {
   const label = folderRows.length > 1 ? `${row.name || 'folder'}: ` : '';
-  reportScan(`${label}Scanning your folder...`);
+  reportScan(`${label}Indexing your music folder...`, { busy: true });
   try {
     scanning = startScan(row.handle, {
       folderId: row.primary ? null : row.id,
-      onProgress: ({ scanned, updated }) => reportScan(`${label}Scanned ${scanned} files, indexed ${updated}.`),
+      onProgress: ({ scanned, updated }) => reportScan(
+        `${label}Indexing your music: ${scanned.toLocaleString()} files read, ${updated.toLocaleString()} added or updated.`,
+        { busy: true },
+      ),
       onFileError: () => {},
     });
+    paintWelcome();
     const summary = await scanning.done;
     reportScan(
       `${label}${summary.tracks} tracks indexed in ${(summary.durationMs / 1000).toFixed(1)}s`
@@ -2497,6 +2690,7 @@ async function performScan(row) {
     reportScan(`Scan stopped: ${error.message}`);
   } finally {
     scanning = null;
+    paintWelcome();
   }
 }
 
@@ -2906,6 +3100,9 @@ async function undoLast() {
 // -------------------------------------------------- loudness scanning ----
 
 let loudnessTotal = 0;
+// The scanner's counts run for the life of the page; each pass counts from here,
+// so a rescan does not report "52 of 26 measured" (minor 8).
+let loudnessBase = 0;
 const loudnessScanner = createLoudnessScanner({
   keyOf: loudnessKey,
   getLoudness: key => getLoudness(key).catch(() => null),
@@ -2935,7 +3132,7 @@ function loudnessStatus() {
   const s = loudnessScanner.status();
   const state = settings.loudnessScan === 'off' ? 'off'
     : s.running ? (s.paused ? 'paused' : 'running') : (loudnessTotal && !s.queued ? 'done' : 'idle');
-  return { ...s, state, total: loudnessTotal, done: s.done + s.skipped };
+  return { ...s, state, total: loudnessTotal, done: Math.min(loudnessTotal, Math.max(0, s.done + s.skipped - loudnessBase)) };
 }
 
 function paintLoudness() {
@@ -2959,6 +3156,8 @@ function scheduleLoudness() {
     // Cue-sheet tracks and their hidden parents are skipped: a gain per part of an image is not measured.
     const untagged = libraryTracks.filter(track => !track.virtual && !track.hidden && !Number.isFinite(track.replayGain?.trackGainDb) && !Number.isFinite(track.replayGain?.albumGainDb));
     loudnessTotal = untagged.length;
+    const before = loudnessScanner.status();
+    loudnessBase = before.done + before.skipped;
     loudnessScanner.enqueue(untagged);
     paintLoudness();
   }, 4000);
@@ -3116,10 +3315,12 @@ const visualiser = createVisualiser({
   getAnalyser: () => engine.analyser(),
   getChannelAnalysers: () => engine.analysers(),
   reducedMotion,
+  inputScale: () => visualiserInputScale(),
   onError: error => {
     // A failing mode is not a reason to lose the player: the driver fell back to None.
     $('#vis-mode').value = visualiser.mode();
     persistVisualiser(visualiser.mode());
+    placeVisualiser();
     toast(`Visualiser stopped: ${error.message}`, 4000);
   },
 });
@@ -3141,7 +3342,54 @@ function applyVisualiserMode(id, { persist = true } = {}) {
   $('#vis-mode').value = applied;
   $('#vis-wrap').hidden = false;
   if (persist) persistVisualiser(applied);
+  placeVisualiser();
   return applied;
+}
+
+// ---- where the one visualiser canvas lives (B1, M1) ----
+//
+// The driver draws into one canvas and sizes it from its box every frame, so the
+// canvas moves between places rather than being copied: the full-window layer
+// (outside the shell), the Now playing stage, or the player bar strip (which the
+// mini player shows larger). Moving the element keeps the driver and Milkdrop.
+
+/** 'vis' or 'cover': what the Now playing stage shows. A per-viewer convenience. */
+let nowStage = 'vis';
+try { if (localStorage.getItem('nakliamp:now-stage') === 'cover') nowStage = 'cover'; } catch { /* blocked storage */ }
+
+const stageShowsVisualiser = () => nowStage === 'vis' && visualiser.mode() !== 'none';
+
+function visualiserHost() {
+  if (isFullVisualiser()) return $('#vis-slot-full');
+  if (!settings.miniPlayer && currentView() === 'now' && stageShowsVisualiser()) return $('#vis-slot-now');
+  return $('#vis-slot-bar');
+}
+
+function placeVisualiser() {
+  const wrap = $('#vis-wrap');
+  const host = visualiserHost();
+  if (wrap.parentElement !== host) host.append(wrap);
+  $('#stage').dataset.show = stageShowsVisualiser() ? 'vis' : 'cover';
+  $('#stage-vis').setAttribute('aria-pressed', String(nowStage === 'vis'));
+  $('#stage-cover').setAttribute('aria-pressed', String(nowStage === 'cover'));
+  $('#vis-mode').hidden = nowStage !== 'vis';
+}
+
+function setNowStage(next) {
+  nowStage = next === 'cover' ? 'cover' : 'vis';
+  try { localStorage.setItem('nakliamp:now-stage', nowStage); } catch { /* blocked storage */ }
+  // Choosing the visualiser while the mode is None picks a mode that draws.
+  if (nowStage === 'vis' && visualiser.mode() === 'none') applyVisualiserMode('bars');
+  placeVisualiser();
+}
+
+/** The stage shows the cover while nothing moves (paused, stopped), the visualiser while it runs. */
+let stageIdle = null;
+function paintStageIdle() {
+  const idle = !visualiser.running;
+  if (idle === stageIdle) return;
+  stageIdle = idle;
+  $('#stage').classList.toggle('idle', idle);
 }
 
 {
@@ -3152,14 +3400,119 @@ function applyVisualiserMode(id, { persist = true } = {}) {
 
 $('#vis-mode').addEventListener('change', event => applyVisualiserMode(event.target.value));
 $('#vis-full').addEventListener('click', () => toggleFullVisualiser());
+$('#vis-exit').addEventListener('click', () => toggleFullVisualiser(false));
+$('#vis-picker').addEventListener('click', () => toggleVisualiserPicker());
+$('#stage-vis').addEventListener('click', () => setNowStage('vis'));
+$('#stage-cover').addEventListener('click', () => setNowStage('cover'));
+// The strip in the player bar is a pointer shortcut to the large view; the
+// keyboard path is the Now playing tab and Shift+V.
+$('#vis-slot-bar').addEventListener('click', () => {
+  if (settings.miniPlayer) return;
+  if (nowStage !== 'vis') setNowStage('vis');
+  show('now');
+});
+
+/** "Link to volume": the gain the person hears, 0 when muted; 1 when unlinked. */
+function visualiserInputScale() {
+  if (!settings.visualiserLinkVolume) return 1;
+  if (engine.state().clock.muted) return 0;
+  return Math.max(0, Math.min(1, positionToGain(volumePosition, settings.volumeFloorDb) * timerFade));
+}
+
+// The picker (cliamp's `v` list with live preview): one tile per mode, each drawing
+// from the same analyser a few times a second, only while the picker is open.
+const PREVIEW_TILE = { width: 160, height: 80 };
+let visualiserPreview = null;
+function mountVisualiserPicker(root) {
+  const grid = document.createElement('div');
+  grid.className = 'vis-tiles';
+  grid.setAttribute('role', 'group');
+  grid.setAttribute('aria-label', 'Visualiser modes');
+  const tiles = [];
+  const buttons = new Map();
+  for (const { id, label } of visualiser.modes()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'vis-tile';
+    button.dataset.mode = id;
+    if (id === 'milkdrop' || id === 'none') {
+      const note = document.createElement('span');
+      note.className = 'vis-tile-note';
+      note.textContent = id === 'none' ? 'Off: show the cover' : 'Milkdrop: choose it to see it';
+      button.append(note);
+    } else {
+      const canvas = document.createElement('canvas');
+      canvas.width = PREVIEW_TILE.width;
+      canvas.height = PREVIEW_TILE.height;
+      canvas.setAttribute('aria-hidden', 'true');
+      button.append(canvas);
+      tiles.push({ canvas, modeId: id });
+    }
+    button.append(label);
+    button.addEventListener('click', () => { applyVisualiserMode(id); paintPressed(); });
+    buttons.set(id, button);
+    grid.append(button);
+  }
+  const link = document.createElement('label');
+  link.className = 'vis-link';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.id = 'vis-link-volume';
+  box.checked = settings.visualiserLinkVolume;
+  box.addEventListener('change', () => run('visualiser.link_volume', { on: box.checked }).catch(reportCommandError));
+  link.append(box, 'Link to volume: a quieter player draws a quieter picture (not Milkdrop)');
+  root.append(grid, link);
+  function paintPressed() {
+    for (const [id, button] of buttons) button.setAttribute('aria-pressed', String(id === visualiser.mode()));
+  }
+  paintPressed();
+  const preview = createPreviewGrid({
+    tiles,
+    getAnalyser: () => engine.analyser(),
+    reducedMotion,
+    inputScale: () => visualiserInputScale(),
+  });
+  visualiserPreview = preview;
+  preview.start();
+  const stopListening = onSettings(next => { box.checked = next.visualiserLinkVolume; paintPressed(); });
+  buttons.get(visualiser.mode())?.focus();
+  return {
+    update: paintPressed,
+    destroy() { preview.stop(); stopListening(); if (visualiserPreview === preview) visualiserPreview = null; },
+  };
+}
+
+function toggleVisualiserPicker(wantOpen) {
+  const isOpen = dialog?.name === 'visualisers';
+  const want = wantOpen === undefined ? !isOpen : wantOpen;
+  if (want && !isOpen) openDialogView('visualisers');
+  if (!want && isOpen) closeDialog();
+  return want;
+}
 
 function isFullVisualiser() { return $('#vis-wrap').classList.contains('full'); }
+let fullReturnFocus = null;
+/**
+ * The full-window visualiser (B1). The canvas moves into a layer outside the
+ * shell, so it fills the window whatever the page's own boxes do, and the shell
+ * goes inert underneath it; Esc, Shift+V or the Exit button bring it back.
+ */
 function toggleFullVisualiser(on) {
-  const full = $('#vis-wrap').classList.toggle('full', on === undefined ? !isFullVisualiser() : on);
-  $('#vis-full').textContent = full ? 'Exit' : '⤢';
-  $('#vis-full').setAttribute('aria-label', full ? 'Exit full-window visualiser' : 'Full-window visualiser');
-  $('#vis-full').title = full ? 'Exit full window (Shift+V or Esc)' : 'Full window (Shift+V)';
-  return full;
+  const want = on === undefined ? !isFullVisualiser() : Boolean(on);
+  if (want === isFullVisualiser()) return want;
+  if (want) fullReturnFocus = document.activeElement;
+  $('#vis-wrap').classList.toggle('full', want);
+  $('#vis-full-layer').hidden = !want;
+  document.documentElement.classList.toggle('vis-full', want);
+  document.querySelector('.shell').inert = want;
+  $('#vis-full').setAttribute('aria-pressed', String(want));
+  placeVisualiser();
+  if (want) $('#vis-exit').focus();
+  else {
+    if (fullReturnFocus?.isConnected && typeof fullReturnFocus.focus === 'function') fullReturnFocus.focus();
+    fullReturnFocus = null;
+  }
+  return want;
 }
 
 // ------------------------------------------------------- playlists ----
@@ -3388,9 +3741,27 @@ $('#lib-list').addEventListener('click', event => {
     return;
   }
   const row = event.target.closest('.lib-row');
-  // Starting a track queues the whole list from that track (P5).
-  if (row) playTracks(visibleRows.map(track => track.id), Number(row.dataset.index)).catch(error => toast(error.message, 5000));
+  if (!row) return;
+  // One click rule with Browse (M4): a mouse click selects the row; Enter or
+  // Space (a click with no pointer, detail 0) and a double click play it.
+  if (event.detail === 0) playLibraryRow(row);
+  else selectLibraryRow(row);
 });
+$('#lib-list').addEventListener('dblclick', event => {
+  if (event.target.closest('.row-tools')) return;
+  const row = event.target.closest('.lib-row');
+  if (row) playLibraryRow(row);
+});
+function selectLibraryRow(row) {
+  for (const other of document.querySelectorAll('#lib-list .lib-row.selected')) other.classList.remove('selected');
+  row.classList.add('selected');
+  row.focus({ preventScroll: true });
+}
+/** Starting a track queues the whole list from that track (P5). */
+function playLibraryRow(row) {
+  selectLibraryRow(row);
+  playTracks(visibleRows.map(track => track.id), Number(row.dataset.index)).catch(error => toast(error.message, 5000));
+}
 // Arrow keys move between rows of the Tracks list (K4).
 $('#lib-list').addEventListener('keydown', event => {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -3403,6 +3774,8 @@ $('#lib-list').addEventListener('keydown', event => {
 });
 $('#lib-search').addEventListener('input', () => { renderLibrary(); });
 $('#lib-rescan').addEventListener('click', () => openLibrary({ prompt: true }));
+$('#welcome-folder').addEventListener('click', () => openLibrary({ prompt: true }));
+$('#welcome-file').addEventListener('click', () => chooseFile());
 $('#lib-folders').addEventListener('click', () => open('music-folders'));
 
 $('#lib-forget').addEventListener('click', async () => {
@@ -3482,7 +3855,8 @@ const DIALOGS = {
   similar: { title: 'More like this', mount: mountSimilar, state: () => ({ trackId: playingTrack?.id ?? null }) },
   'genre-fill': { title: 'Fill missing genres', mount: mountGenreFill, state: () => ({}) },
   // V5: a classic skin (.wsz) the person picks; Webamp loads lazily, only then.
-  skins: { title: 'Classic skin face', mount: mountWebampFace, state: () => ({}) },
+  skins: { title: 'Classic skin (.wsz)', mount: mountWebampFace, state: () => ({}) },
+  visualisers: { title: 'Visualisers', mount: root => mountVisualiserPicker(root), state: () => undefined },
 };
 const V1X_DIALOGS = ['network', 'music-folders', 'duplicates', 'rename', 'sleep', 'commands', 'similar', 'genre-fill', 'skins'];
 
@@ -3524,6 +3898,7 @@ function openSearch() {
   show('library');
   if (libraryPane === 'browse' && browsePanel?.focusSearch) browsePanel.focusSearch();
   else { showLibraryPane('tracks'); $('#lib-search').focus(); }
+  paintWelcome();
 }
 
 function openBrowseView(view, arg) {
@@ -3537,7 +3912,7 @@ function openBrowseView(view, arg) {
 function viewOpeners() {
   const dialogView = name => arg => openDialogView(name, arg);
   return new Map([
-    ['library', () => { show('library'); showLibraryPane('tracks'); }],
+    ['library', () => { show('library'); showLibraryPane(libraryPane); }],
     ['search', openSearch],
     ['queue', () => show('queue')],
     ['now', () => show('now')],
@@ -3577,7 +3952,7 @@ const ctx = {
   engine,
   queue,
   settings: { get: () => loadSettings(), set: patch => saveSettings(patch), on: fn => onSettings(fn) },
-  run: (name, input, options) => run(name, input, options),
+  run: (name, input, options) => run(name, input, options).catch(error => { throw plainError(error); }),
   library: {
     // Listed tracks only: no cue-sheet parents, no tracks the person hid (L14).
     tracks: () => libraryVisible(),
@@ -3879,6 +4254,7 @@ const handlers = {
   },
   'player.mute': input => { engine.setMuted(input.muted ?? !engine.state().clock.muted); return statusOf(); },
   'player.status': () => statusOf(),
+  'player.snapshot': () => agentEvents.snapshot(),
 
   'queue.read': input => {
     const snap = queue.snapshot();
@@ -4037,9 +4413,12 @@ const handlers = {
     const applied = input.mode !== undefined ? applyVisualiserMode(input.mode) : visualiser.cycle(input.step);
     $('#vis-mode').value = applied;
     persistVisualiser(applied);
+    placeVisualiser();
     return { mode: applied };
   },
   'visualiser.full': input => ({ full: toggleFullVisualiser(input.on) }),
+  'visualiser.picker': input => ({ open: toggleVisualiserPicker(input.open) }),
+  'visualiser.link_volume': input => ({ linkVolume: saveSettings({ visualiserLinkVolume: input.on ?? !settings.visualiserLinkVolume }).visualiserLinkVolume }),
 
   'view.open': input => { open(input.view); return { view: input.view }; },
   'view.close': () => {
@@ -4365,7 +4744,16 @@ function safeSmartCount(rule) {
 
 const run = bindCommands(handlers, { confirm: request => confirmCommand(request) });
 
+/** A browser error a person can act on (minor 9): a folder that is gone says so. */
+function plainError(error) {
+  if (error?.name === 'NotFoundError') {
+    return Object.assign(new Error('Your music folder is no longer there. Reopen it in Music folders, or open it again.'), { code: 'unavailable', cause: error });
+  }
+  return error;
+}
+
 function reportCommandError(error) {
+  error = plainError(error);
   const message = String(error?.message ?? error).replace(/^\[[a-z-]+\] /, '');
   if (error?.code === 'declined') return;
   toast(message, 5000);
@@ -4394,6 +4782,48 @@ host.ready();
 // WebMCP (N5): the same commands for an in-browser agent, where the browser offers it.
 registerWebMcpTools({ run }).catch(error => console.warn('[nakliamp] WebMCP registration failed', error));
 
+// The agent face's snapshot and event stream (M3, after cliamp's IPC v2), and the
+// BroadcastChannel that carries them to other tabs and windows of this origin.
+// NakliOS's SDK has no app-to-host event call and WebMCP has no notifications, so
+// the channel is the one event sink (docs/agent-face.md).
+const agentInstance = instanceId();
+let queueRevision = 0;
+let lastPlayerError = null;
+queue.onChange(() => { queueRevision += 1; agentEvents.poke(); });
+function snapshotParts() {
+  const snap = queue.snapshot();
+  return {
+    status: statusOf(),
+    queue: { length: snap.length, index: snap.index, revision: queueRevision },
+    eq: settings.eq,
+    visualiser: { mode: visualiser.mode(), linkVolume: settings.visualiserLinkVolume },
+    dsp: engine.state().dsp,
+    mono: settings.mono,
+    error: lastPlayerError,
+  };
+}
+let agentChannel = null;
+try { agentChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL_NAME) : null; } catch { agentChannel = null; }
+const agentEvents = createEventPublisher({
+  getSnapshot: () => buildSnapshot(snapshotParts()),
+  sinks: agentChannel ? [message => agentChannel.postMessage(message)] : [],
+  instance: agentInstance,
+});
+const agentBridge = agentChannel ? createChannelBridge({ channel: agentChannel, run, publisher: agentEvents, instance: agentInstance }) : null;
+engine.on('*', entry => {
+  if (entry?.type === 'playback:refused') {
+    lastPlayerError = { code: entry.detail?.code ?? 'refused', message: entry.detail?.message ?? 'Playback refused.' };
+    agentEvents.error(lastPlayerError);
+  } else if (entry?.type === 'track:loaded') {
+    lastPlayerError = null;
+  }
+  agentEvents.poke();
+});
+onSettings(() => agentEvents.poke());
+$('#volume').addEventListener('input', () => agentEvents.poke());
+agentEvents.start();
+addEventListener('pagehide', () => { agentEvents.stop(); agentBridge?.close(); });
+
 // ----------------------------------------------------- controls ----
 
 function paintSeekButtons() {
@@ -4405,7 +4835,6 @@ function paintSeekButtons() {
 }
 
 $('#open-file').addEventListener('click', chooseFile);
-$('#open-another').addEventListener('click', chooseFile);
 $('#refusal-open').addEventListener('click', () => { dismissRefusal(); chooseFile(); });
 $('#refusal-dismiss').addEventListener('click', dismissRefusal);
 $('#play').addEventListener('click', () => run('player.toggle').catch(reportCommandError));
@@ -4432,14 +4861,59 @@ $('#file-input').addEventListener('change', async event => {
 $('#open-sound').addEventListener('click', () => open('sound'));
 $('#open-ai').addEventListener('click', () => open('ai'));
 $('#open-keymap').addEventListener('click', () => open('keymap'));
-$('#tools-menu').addEventListener('change', event => {
-  const view = event.target.value;
-  event.target.value = '';
-  if (view) open(view);
+// The Tools menu (M2, M5): a menu button, keyboard operable (arrows, Home, End,
+// Escape, Tab), instead of a native select. On a phone it also holds the header
+// buttons that do not fit.
+const toolsButton = $('#tools-btn');
+const toolsMenu = $('#tools-menu');
+const menuItems = () => [...toolsMenu.querySelectorAll('[role=menuitem]')].filter(item => item.offsetParent !== null);
+function setToolsMenu(open, { focus = 'first' } = {}) {
+  toolsMenu.hidden = !open;
+  toolsButton.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const items = menuItems();
+    (focus === 'last' ? items.at(-1) : items[0])?.focus();
+  }
+}
+function closeToolsMenu({ restore = true } = {}) {
+  if (toolsMenu.hidden) return;
+  setToolsMenu(false);
+  if (restore) toolsButton.focus();
+}
+toolsButton.addEventListener('click', () => setToolsMenu(toolsMenu.hidden));
+toolsButton.addEventListener('keydown', event => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  setToolsMenu(true, { focus: event.key === 'ArrowUp' ? 'last' : 'first' });
 });
+toolsMenu.addEventListener('keydown', event => {
+  const items = menuItems();
+  const at = items.indexOf(document.activeElement);
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+  if (step) items[(at + step + items.length) % items.length]?.focus();
+  else if (event.key === 'Home') items[0]?.focus();
+  else if (event.key === 'End') items.at(-1)?.focus();
+  else if (event.key === 'Escape') closeToolsMenu();
+  else if (event.key === 'Tab') { closeToolsMenu({ restore: false }); return; }
+  else return;
+  event.preventDefault();
+  event.stopPropagation();
+});
+toolsMenu.addEventListener('click', event => {
+  const item = event.target.closest('[role=menuitem]');
+  if (!item) return;
+  closeToolsMenu({ restore: false });
+  if (item.dataset.view) open(item.dataset.view);
+  else if (item.dataset.act === 'theme') run('ui.theme', { theme: nextTheme() }).catch(reportCommandError);
+  else if (item.dataset.act === 'mini') run('ui.mini').catch(reportCommandError);
+  else if (item.dataset.act === 'file') chooseFile();
+});
+document.addEventListener('pointerdown', event => {
+  if (!toolsMenu.hidden && !event.target.closest('.menu-wrap')) closeToolsMenu({ restore: false });
+}, true);
 $('#speed').addEventListener('change', event => run('player.speed', { rate: Number(event.target.value) }).catch(reportCommandError));
 $('#timer-chip').addEventListener('click', () => open('sleep'));
-$('#theme-toggle').addEventListener('click', () => run('ui.theme', { theme: cycle(['light', 'dark', 'system'], settings.theme) }).catch(reportCommandError));
+$('#theme-toggle').addEventListener('click', () => run('ui.theme', { theme: nextTheme() }).catch(reportCommandError));
 $('#mini-toggle').addEventListener('click', () => run('ui.mini').catch(reportCommandError));
 $('#mini-exit').addEventListener('click', () => run('ui.mini', { on: false }).catch(reportCommandError));
 $('#now-fav').addEventListener('click', () => { if (playingTrack) run('track.favourite', { ids: [playingTrack.id] }).catch(reportCommandError); });
@@ -4570,6 +5044,9 @@ if (HARNESS) {
     sleepSeconds: seconds => timers.setSleep({ minutes: seconds / 60 }),
     timers: () => timers.status(),
     registerWebMcp: env => registerWebMcpTools({ run, env }),
+    // Agent face gate (test/agent-face.html).
+    agentInstance: () => agentInstance,
+    pickerTilesDrawn: () => visualiserPreview?.drawn() ?? null,
     visibleTracks: () => libraryVisible().map(track => ({ ...track })),
   });
 }

@@ -163,13 +163,22 @@ function originsSection(ctx, id) {
       h('p', { id: `${box.id}-d`, className: 'hint' }, row.purpose, ' ', sendsText(row)));
   }
 
+  let rendered = false;
   async function render() {
     try { list.replaceChildren(...(await rows()).map(renderRow)); } catch (error) { status.textContent = plainError(error); }
+    // The switches arrive after the dialog focused its first field; the first
+    // switch, not the token field, is where the panel starts (minor 12).
+    if (!rendered) {
+      rendered = true;
+      const active = list.ownerDocument?.activeElement;
+      if (active?.type === 'password' && active.closest('.nk-net')) list.querySelector('input')?.focus();
+    }
   }
 
   const off = consent?.onChange?.(() => render());
   const section = h('section', { 'aria-labelledby': `${id}-or-h` },
-    h('h3', { id: `${id}-or-h`, textContent: 'Network' }),
+    // The dialog title already says Network (minor 2).
+    h('h3', { id: `${id}-or-h`, textContent: 'Providers' }),
     h('p', { className: 'hint', textContent: 'NakliAmp sends nothing until you turn a provider on. No audio ever leaves this device.' }),
     list, status);
   return { section, render, destroy: () => { if (typeof off === 'function') off(); } };
@@ -191,6 +200,8 @@ function listenBrainzSection(ctx, id) {
   function render() {
     if (!lb) { status.textContent = 'Scrobbling is not available in this build.'; for (const b of [save, validate, forget, flush]) b.disabled = true; return; }
     const tokenSet = Boolean(lb.token());
+    // Nothing to save until a token is typed (minor 12).
+    save.disabled = !token.value.trim();
     validate.disabled = !tokenSet && !token.value.trim();
     forget.disabled = !tokenSet;
     flush.disabled = !tokenSet || !lb.queued().length;

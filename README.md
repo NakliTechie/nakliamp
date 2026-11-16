@@ -1,215 +1,120 @@
-# NakliAmp
+<h1 align="center">NakliAmp</h1>
 
-A music player that runs in a browser tab and never uploads a byte.
+<p align="center">
+  <strong>A music player in a browser tab that plays the folder of music you already own,<br>
+  with the index kept on your device and nothing uploaded.</strong>
+</p>
 
-Point it at your music folder. It indexes what it finds, plays it, and keeps
-the index on your device. There is no account, no cookie, and no telemetry.
-There are **no analytics — verify with the network tab.**
+<p align="center">
+  NakliAmp is one web page or one HTML file. It has no account, no server and no telemetry.
+</p>
 
-`v0.3.0-m2`
+<p align="center">
+  <img alt="account: none" src="https://img.shields.io/badge/account-none-3fb950?style=flat-square">
+  <img alt="network: opt-in only" src="https://img.shields.io/badge/network-opt--in%20only-3fb950?style=flat-square">
+  <img alt="build: one HTML file" src="https://img.shields.io/badge/build-one%20HTML%20file-3fb950?style=flat-square">
+  <img alt="version 0.3.0-m2" src="https://img.shields.io/badge/version-0.3.0--m2-3fb950?style=flat-square">
+</p>
 
----
+## Install
 
-## Where it comes from
+| | |
+|---|---|
+| **NakliOS** | Open [naklios.dev](https://naklios.dev) and start **NakliAmp**, the system music player. |
+| **Browser** | Open <https://naklios.dev/apps/nakliamp/>, the same app outside the NakliOS shell. |
+| **One file, lean** | `node scripts/build-single-file.mjs` writes `dist/nakliamp.html` (2.3 MB). |
+| **One file, full** | `node scripts/build-single-file.mjs --full` writes `dist/nakliamp-full.html` (4.7 MB), with the software decoder for WMA, WavPack, Monkey's Audio, Musepack, TTA, DSD and ALAC. |
 
-Winamp, obviously — the compact player that sat on top of your own collection
-and answered to nobody. NakliAmp takes the gene, not the pixels: a persistent
-player, a library behind it, playlists as files you own, and a spectrum
-bouncing away in the corner.
+Pick your music folder, or drag it onto the window. NakliAmp indexes it in a background worker,
+subfolders included, and lists the tracks as it reads their tags. Press Space to play. Next time
+you open NakliAmp the library is already there; if the browser asks to renew the folder
+permission, one button restores it. There is no sign-up and no settings file. There are no
+analytics: verify with the network tab.
 
-The nearer influence is [cliamp](https://github.com/bjarneo/cliamp), a terminal
-Winamp that got the shape right — the picker with live preview, the keyboard
-map, playlists as artifacts, the honest refusal. Where cliamp reaches thirteen
-streaming services, NakliAmp deliberately does not — a browser tab cannot run
-`yt-dlp`, and the services that a tab *could* reach are refused on charter
-rather than on feasibility.
+## Why
 
-The part neither of them had: **the player tells you the truth about itself.**
-Every track shows its real path — container, codec, which decoder actually ran,
-what came out — including when it fell off the fast path and why.
+Your music is a folder of files you bought, ripped or recorded. Most players want an account,
+a cloud library or a desktop install before they will play it.
 
-## What it does
-
-**Library.** Attach a folder — pick it, or drag it onto the window — and
-NakliAmp indexes it in a background worker, subfolders included: ID3v2, Vorbis
-comments, MP4 atoms, FLAC pictures, embedded art. Search is fuzzy and ranked,
-so `skr` finds "Sakura". Playback remembers where you stopped.
-
-The folder is remembered between sessions. Reopen NakliAmp and your library is
-already there; if the browser wants its permission renewed, your indexed tracks
-still list and one button restores access. Storage persistence is requested so
-the browser does not evict the grant or the index.
-
-**The index is a cache, not the truth.** Your folder is the truth. Losing the
-index costs a rescan and nothing else.
-
-**Playlists are files in your folder**, not rows in a database — an artifact
-any other player can open, and one that NakliAmp's disappearance cannot take
-from you. Reads **M3U**, **M3U8** (with `EXTINF`), **PLS**, **XSPF** and
-**JSPF**; writes **M3U8**. Create, rename, reorder, delete; every edit rewrites
-the file. An entry naming a remote stream, or one that tries to climb above the
-folder you granted, is kept and counted as unresolved rather than followed.
-
-**A persistent player.** The transport never goes away. Starting a track from
-the library leaves you in the library — what is playing and what you could play
-next are both on screen, always.
-
-**A visualiser**, 14 modes plus None: Bars, Bars Dot, Bars Outline, Classic
-Peak, Classic LED, Wave, Scope, Stereo, Pulse, Bricks, Columns, Scatter, Flame,
-Matrix. **Stereo means stereo** — the engine splits whichever rung is playing
-into two taps, so a mono file shows one side silent rather than a picture
-invented from half a spectrum.
-
-`v` cycles, the picker selects, `V` goes full window. Reduced motion slows it
-rather than stopping it — that removes the movement, not the information.
+NakliAmp plays that folder in a tab. It has a play queue with shuffle and
+repeat, gapless playback within an album, crossfade, ReplayGain, a 10-band equaliser, media keys,
+browse by album, artist, genre, year and folder, smart playlists, tag editing, lyrics, 31
+visualiser modes and classic Winamp `.wsz` skins. The index is a cache over your folder; losing
+it costs a rescan. Playlists are `.m3u8` files written into your folder, so any other player
+can open them. Tag edits write back to the file in Chromium only; elsewhere tags are read-only.
 
 ## What it plays
 
-NakliAmp tries every rung before it gives up on a file:
+NakliAmp tries four decoders in order for each file and names the one that ran in the track
+strip. The vendored Reel engine (WebCodecs) plays MP3, FLAC, AAC/M4A, Opus, Vorbis, WAV and
+audio in Matroska and WebM. Next comes the browser's own audio element, which is not gapless,
+and the strip says so. NakliAmp's own decoder then reads AIFF, AIFC, CAF and AU (8 to 32-bit
+integer and float, G.711). The full build adds a libav.js decoder for WMA, WavPack, Monkey's
+Audio, Musepack, TTA, DSD and ALAC. A file that none of them can play gets a dismissible banner
+naming the file, the decoder and the reason. The 19 audio fixtures listed in `test/manifest.json` are played in Chromium by
+`test/golden-audio.html`, `test/universal.html` and `test/wasm-decode.html`.
 
-| Rung | Path | What it means |
-|---|---|---|
-| **R1** | WebCodecs via the Reel engine | Hardware decode, sample-accurate clock, full detail in the strip |
-| **R2** | Native element passthrough | The browser's own decoder. Plays, loses gapless, and says so |
-| **R3** | Software decode | NakliAmp decodes it itself when nothing else will |
-| **R4** | Named refusal | Which file, which rung, and why |
+## Services you can turn on
 
-**On the engine rung:** MP3, FLAC, AAC/M4A, Opus, Vorbis/OGG, WAV, and audio in
-Matroska and WebM.
+NakliAmp itself never phones home. It contacts only the services you turn on in the Network
+services panel, and each one is off until you do:
 
-**On the native rung:** whatever your browser can decode, including containers
-the engine has never heard of. An unrecognised container is not the same thing
-as an unplayable one, so the browser gets to decide — and the strip tells you
-it fell back.
+- **MusicBrainz** and **Cover Art Archive** fill in album tags and covers you approve.
+- **LRCLIB** fetches lyrics for the playing track.
+- **ListenBrainz** records what you play, with your token, and queues listens while offline.
 
-**On the software rung:** AIFF, AIFC, CAF and AU, in 8/16/24/32-bit integer and
-float, with G.711 companding. None of these are exotic — AIFF is what a Mac
-rips to, CAF is what Logic and QuickTime write, AU is decades of Unix audio —
-and Chrome decodes none of them by either other path. They are uncompressed, so
-closing that gap needed a header parser rather than a codec, and it costs no
-download.
+The panel says what each service receives before you turn it on. The page's
+Content-Security-Policy allows no other origin, and `scripts/verify-delivery.mjs` fails if
+it does. `scripts/verify-boundary.mjs` calls every network feature with nothing turned on and
+fails on any request; with one service on, it fails on a request to any other origin.
 
-**On the software rung, heavy build only:** WMA (v1, v2, Pro, Lossless),
-WavPack, Monkey's Audio, Musepack (SV7 and SV8), TTA and DSD — through a custom
-1.2 MB libav build carrying exactly those decoders and nothing else. The lean
-build refuses them by name; a build's decoders are a property of that build.
+## Part of NakliOS
 
-Two more consequences worth knowing: **a file carrying video plays its audio**
-rather than being refused, and **a refusal is a dismissible banner**, not a
-screen that destroys your library and stops the music.
+NakliAmp is the NakliOS music player; [Reel](https://github.com/NakliTechie/reel) is the media
+player. Both run the Reel engine, which NakliAmp pins at one commit and `scripts/verify-vendor.mjs`
+checks against the hashes in `VENDOR.md`. Inside NakliOS, NakliAmp follows the host theme and can
+make a playlist from a description through the NakliOS model; without a model, every other
+feature still works. Its 76 player actions are published in `commands.json`. When the browser
+offers `document.modelContext`, the read and reversible ones are registered as WebMCP tools.
 
-## Keyboard
+## Commands
 
-| Key | Action |
-|---|---|
-| Space | Play or pause |
-| Left / Right | Seek backward or forward 5 seconds (Shift: 30) |
-| Up / Down | Raise or lower volume |
-| M | Mute or unmute |
-| N / P | Next or previous track |
-| L | Open the library |
-| v | Cycle visualiser mode |
-| Shift+V | Full-window visualiser |
-| Esc | Leave the full-window visualiser |
-| ? | Show every shortcut |
-
-## Part of naklios
-
-NakliAmp is the **system music player of [naklios](https://naklios.dev)**. The
-desktop model: an OS ships both a media player and a music player, and they are
-not the same app.
-
-- **[Reel](https://github.com/NakliTechie/reel) is the system media player** —
-  open a file, watch it, close it. **NakliAmp owns the collection** — library,
-  queue, playlists, resume, search. Different shape, same engine.
-- **One media core, two apps.** NakliAmp is the first external consumer of
-  Reel's engine, which is what proves that engine is separable at all.
-- The standalone URL and the in-shell app are the same file.
-
-Engine changes land upstream in Reel first and are pulled down; NakliAmp never
-patches its vendored copy. The audio-graph seam the visualiser needs was added
-to Reel, not worked around here.
-
-## Two builds
-
-**Single file, lean.** `dist/nakliamp.html` — the app, the engine and the
-demuxer, about 0.9 MB, no external references. Save it anywhere and open it,
-including straight off your filesystem over `file://`.
-
-**Single file, full.** `dist/nakliamp-full.html` — the same plus the wasm
-software decoder, about 2.8 MB. Adds WMA, WavPack, Monkey's Audio, Musepack, TTA and DSD. The wasm is embedded as
-bytes, so it still fetches nothing.
-
-```sh
-node scripts/build-single-file.mjs
-node scripts/build-single-file.mjs --full
+```
+?            # every keyboard shortcut, searchable
+Mod+K        # command bar: type what you want ("shuffle by albums")
+Space N P    # play or pause, next, previous
+Left Right   # seek 5 seconds (Shift: 30); 0 to 9 jump to 0% to 90%
+Up Down M    # volume in 2 dB steps, mute
+Q Shift+Q    # add to queue, play next
+S R E        # shuffle, repeat, equaliser on or off
+[ ] Shift+S  # slower, faster, stop after this track
+V Shift+V    # next visualiser, full-window visualiser
+L / Y I      # library, search, lyrics, track inspector (Shift+M: mini player)
 ```
 
-**Hosted.** The same app deploys as Cloudflare Worker Static Assets at
-<https://naklios.dev/apps/nakliamp/>. The published package contains only the
-app, its modules, the engine, the Mediabunny runtime and licence, and the
-corresponding-source notice in `VENDOR.md`.
+Every shortcut runs a command from the list that `commands.json` publishes.
 
-## Vendored engine
+## Verify it yourself
 
-NakliAmp pins Reel commit `292b0916d7f139f6f27fe14661772a7dee43da7d` and does
-not patch it. See `VENDOR.md` for file hashes and the corresponding-source
-notice. NakliAmp never imports Mediabunny directly; the pinned engine is the
-only ingress, and a gate enforces it.
-
-## Verification
-
-```sh
-./scripts/verify-browser.sh
+```
+./scripts/verify-browser.sh                        # every gate below, then 10 browser harnesses, twice each
+node --test test/*.test.mjs                        # the Node unit suites
+node scripts/verify-boundary.mjs                   # engine boundary and the network check above
+node scripts/verify-delivery.mjs                   # imports present, CSP allowlist, source notice
+node scripts/verify-single-file.mjs [--full]       # the built file references nothing outside itself
+python3 scripts/cdp-harness.py <harness-url>       # one harness in a running Chrome over CDP
 ```
 
-That runs the static gates, the Node unit suites, and eight Chromium harnesses
-twice each, cold and warm: golden audio, UI smoke, the library scan gate, the
-library end-to-end gate, universal playback, the analyser tap, wasm decode,
-and the single-file release.
+Each harness fails on any console error and on any request to an origin other than the one
+serving the page, whether or not the request succeeds. The release harness drives the two built
+files through the DOM alone, because the test hooks are cut at build time. What each feature row
+covers, and what was not checked in a browser, is in `docs/specs/nakliamp-parity-001.md`.
+The committed release gate is Chromium-only. Safari and Firefox behaviour is not release evidence.
 
-**Any console error fails the run, and so does any request to an origin other
-than the one serving the page** — whether or not it succeeds. That last part is
-what actually backs the no-analytics claim above; checking only for *failed*
-requests, which is what it used to do, would pass a working beacon.
+## License
 
-The release gate drives the two artifacts through the DOM alone. There is no
-test seam in them to drive: it is cut at build time, so the file the gate opens
-is the file you download, byte for byte.
+The repository has no licence file yet. Vendored code keeps its own licence (Mediabunny MPL-2.0,
+libav.js LGPL-2.1, music-metadata, Butterchurn and Webamp MIT); `VENDOR.md` lists each one.
 
-The end-to-end gate attaches a real folder and plays from it. A folder grant
-needs a user gesture no harness can give, so it uses an OPFS directory:
-`navigator.storage.getDirectory()` returns a real directory handle with no
-prompt, and every line of app code after that point is the one a granted folder
-runs.
-
-The committed release gate is Chromium-only. Safari and Firefox behaviour is
-not release evidence.
-
-## No CI
-
-There is no continuous integration and no GitHub Actions workflow. Every gate
-that matters needs a real browser, because the harnesses drive Chromium against
-committed fixtures and fail on any console error or network request. A green
-tick from a runner that cannot open an audio context would mean less than
-nothing.
-
-## Since the v1 parity build (2026-11-16)
-
-Built and checked in Chrome: a play queue with shuffle and repeat, gapless
-playback between tracks of one album, crossfade, ReplayGain from tags and from
-an on-device loudness scan, a 10-band equaliser, Media Session (media keys and
-the system now-playing panel), browse views by album, artist, genre, year and
-folder, ratings and favourites, smart playlists, tag editing written back to
-the file (Chromium), lyrics (embedded and `.lrc`), folder art, a Milkdrop
-visualiser, light and dark themes, a mini player, a keyboard-map overlay (`?`),
-AI playlists from a description through the NakliOS model, and a command list
-(`commands.json`) that NakliOS and agents can call.
-
-Since v1.x (2026-11-17): cue sheets, several music folders, duplicates, rename and
-find-and-replace in tags, playback speed, sleep timer, mono, volume in dB, output
-device choice, Winamp `.eqf` presets, ALAC, classic `.wsz` skins through Webamp,
-31 visualiser modes, "More like this", genre fill, a command bar, WebMCP, and three
-opt-in services that are off until you turn each one on: MusicBrainz tags and
-covers, LRCLIB lyrics and ListenBrainz scrobbling. The full matrix and how each row
-was checked: `docs/specs/nakliamp-parity-001.md`.
+What shipped: [docs/specs/nakliamp-parity-001.md](docs/specs/nakliamp-parity-001.md) · vendored
+code: [VENDOR.md](VENDOR.md) · for agents: [commands.json](commands.json)

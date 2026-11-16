@@ -12,7 +12,9 @@
 
 import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
 import { decodePcm, sniffPcm } from '../app/decode/pcm.mjs';
-import { libavDecoder, decodeLibav, libavInstance } from '../app/decode/libav.mjs';
+import { libavDecoder, decodeLibav, libavInstance, streamLibav } from '../app/decode/libav.mjs';
+import { whenStreamsClosed, openStreamCount } from '../app/decode/libav-stream.mjs';
+import { makeLongDsf } from './pending-dsd-make.mjs';
 
 const PCM = { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm };
 const result = document.querySelector('#result');
@@ -53,6 +55,8 @@ async function checkFullBuild(name, container, mime) {
   assert(engine.state().clock.playing, `${name}: not playing.`);
   assert(engine.state().clock.positionS > 0, `${name}: clock did not advance.`);
   engine.pause();
+  // Gives the R3 graph and any decode stream back, so later cases start clean.
+  engine.destroy();
   return { path: loaded.path, seconds: +state.media.duration.toFixed(2) };
 }
 
@@ -151,6 +155,83 @@ async function checkTooLarge(report) {
   report.tooLarge = refusal.code;
 }
 
+// A five-minute DSD64 stereo track plays, streamed.
+//
+// Whole-file decode of this file would hold about 212 MB in and about 850 MB
+// of Float32 out at 352.8 kHz. Streamed, it is read a slice at a time and
+// resampled inside libav to the context rate. The file is built here from the
+// one-second fixture (DSD compresses nothing, so a real one would weigh
+// 212 MB in the repository). The case asserts playback starts, the clock
+// advances, a seek near the end lands, the track plays to its end, the JS
+// heap grows by under 64 MB while it plays, and the wasm heap returns to
+// its baseline after destroy.
+async function checkStreamedDsd(report) {
+  const mono = new Uint8Array(await (await fixture('audio-dsd.dsf')).arrayBuffer());
+  const long = makeLongDsf(mono, 300);
+  const file = new File(long.parts, 'long-dsd64.dsf');
+  const instance = await libavInstance();
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Warm the stereo decoder and resampler once: their static tables are not a per-track leak.
+  const warm = await streamLibav(file, { container: 'dsd', outputRate: 48000 });
+  await warm.read();
+  await warm.close();
+  await whenStreamsClosed();
+  const heapBaseline = await instance.mallinfo_uordblks();
+  const jsHeap = () => performance.memory?.usedJSHeapSize ?? null;
+  const jsBaseline = jsHeap();
+  let jsPeak = jsBaseline;
+  const sampler = setInterval(() => { const now = jsHeap(); if (now > jsPeak) jsPeak = now; }, 50);
+
+  const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM, libavDecoder] });
+  try {
+    const loaded = await engine.load(file);
+    assert(loaded.path === 'r3', `The long DSD loaded on ${loaded.path}.`);
+    assert(Math.abs(loaded.duration - long.seconds) < 0.001, `Duration ${loaded.duration}, expected ${long.seconds}.`);
+    const state = engine.state();
+    assert(state.honesty.decode.includes('software decode, streamed'), `Strip: ${state.honesty.decode}`);
+    assert(state.track.sampleRate <= 96000, `Output at ${state.track.sampleRate} Hz, not resampled.`);
+
+    await engine.play();
+    await sleep(400);
+    let clock = engine.state().clock;
+    assert(clock.playing, 'The long DSD is not playing.');
+    assert(clock.positionS > 0.1 && clock.positionS < 5, `Clock at ${clock.positionS} after 400 ms.`);
+    const advancedFrom = clock.positionS;
+    await sleep(300);
+    assert(engine.state().clock.positionS > advancedFrom, 'The clock did not advance.');
+
+    const target = long.seconds - 2.5;
+    await engine.seek(target);
+    await sleep(300);
+    clock = engine.state().clock;
+    assert(clock.playing && clock.positionS > target && clock.positionS < target + 1.5,
+      `After a seek to ${target.toFixed(2)} the clock is at ${clock.positionS} (playing ${clock.playing}).`);
+
+    // The tail plays out and the track ends on its own.
+    const deadline = performance.now() + 8000;
+    while (engine.state().clock.playing && performance.now() < deadline) await sleep(100);
+    clock = engine.state().clock;
+    assert(!clock.playing, 'The long DSD did not end.');
+    assert(Math.abs(clock.positionS - long.seconds) < 0.01, `Ended at ${clock.positionS}, expected ${long.seconds}.`);
+  } finally {
+    clearInterval(sampler);
+    engine.destroy();
+  }
+  await whenStreamsClosed();
+  const heapAfter = await instance.mallinfo_uordblks();
+  assert(openStreamCount() === 0, `${openStreamCount()} decode streams still open.`);
+  assert(heapAfter === heapBaseline, `The wasm heap holds ${heapAfter - heapBaseline} bytes more after destroy.`);
+  const growthMb = jsBaseline === null ? null : (jsPeak - jsBaseline) / 1024 / 1024;
+  assert(growthMb === null || growthMb < 64, `The JS heap grew by ${growthMb?.toFixed(1)} MB while streaming.`);
+  report.streamedDsd = {
+    fileMb: +(file.size / 1024 / 1024).toFixed(1),
+    seconds: +long.seconds.toFixed(3),
+    jsHeapPeakGrowthMb: growthMb === null ? 'performance.memory unavailable' : +growthMb.toFixed(1),
+    wasmHeapDeltaBytes: heapAfter - heapBaseline,
+  };
+}
+
 async function run() {
   const report = {};
 
@@ -175,6 +256,8 @@ async function run() {
   await checkHeapAfterFailures(report);
 
   await checkTooLarge(report);
+
+  await checkStreamedDsd(report);
 
   return report;
 }

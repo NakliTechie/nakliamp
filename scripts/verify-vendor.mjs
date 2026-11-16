@@ -19,7 +19,7 @@ const expected = Object.freeze({
   'vendor/butterchurn/presets-3.0.0-beta.4.mjs': 'a500b2b85493c37a4001033544294bdb288d0607cc591ec438562149adce4b5e',
   'vendor/butterchurn/LICENSE-MIT.txt': 'e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98',
   'vendor/butterchurn/LICENSE-presets-MIT.txt': 'e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98',
-  'vendor/webamp/webamp-2.3.1.bundle.min.mjs': 'ff0f3eeae23608d68e941a16e9261a67d1122f42e55c56cbd0eb7c83aedd70c6',
+  'vendor/webamp/webamp-2.3.1.bundle.min.mjs': '15915991ffc5334e57ec7011a92a75e811a5e701c6358db682e2d5c8d1a3d100',
   'vendor/webamp/LICENSE-MIT.txt': 'fc7f2696d3e70b5c04659de0a843c1d7defebbb14eb2a07a38808fead88d9279',
 });
 

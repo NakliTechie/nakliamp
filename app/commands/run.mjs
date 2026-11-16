@@ -230,9 +230,10 @@ export function keymapRows({ mac = false, groupLabels = {} } = {}) {
   return [...groups.values()];
 }
 
-// One row per key, or one collapsed "first to last" row past four keys.
+// One row per key, or one collapsed "first to last" row for a long run such as
+// the digits 0 to 9. A command with a handful of named keys stays listed.
 function commandRows(c, mac) {
-  if (c.keys.length > 4) {
+  if (c.keys.length > 5) {
     const first = displayKey(c.keys[0].key, { mac });
     const last = displayKey(c.keys[c.keys.length - 1].key, { mac });
     return [{ name: c.name, keys: [`${first} to ${last}`], label: c.keymapLabel ?? c.label }];

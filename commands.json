@@ -248,6 +248,20 @@
       }
     },
     {
+      "name": "player.snapshot",
+      "label": "Runtime snapshot",
+      "description": "The whole runtime state in one record, shaped after cliamp's IPC v2 snapshot: state, track (id and display fields, no path), position, duration, volume in dB, mute, speed, mono, shuffle, repeat, queue length, index and revision, EQ preset, visualiser mode, the DSP route, and a revision that moves when any of these change.",
+      "scope": "read",
+      "approval": "read",
+      "group": "player",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "queue.read",
       "label": "Read queue",
       "description": "A page of the play queue: each entry's position, track id, title, artist, album and duration, plus the current position, shuffle and repeat.",
@@ -1230,6 +1244,47 @@
       ]
     },
     {
+      "name": "visualiser.picker",
+      "label": "Visualiser picker",
+      "description": "Open the visualiser picker, where every mode draws live in a small tile, or close it. Without `open` it toggles.",
+      "scope": "read",
+      "approval": "read",
+      "group": "visualiser",
+      "input": {
+        "type": "object",
+        "properties": {
+          "open": {
+            "type": "boolean",
+            "description": "true opens, false closes"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "shortcut": [
+        "Alt+V"
+      ]
+    },
+    {
+      "name": "visualiser.link_volume",
+      "label": "Link visualiser to volume",
+      "description": "Scale the visualiser's input by the current volume, so a quiet player draws a quiet picture. Without `on` it toggles. Milkdrop reads the audio graph itself and is not scaled.",
+      "scope": "write",
+      "approval": "reversible",
+      "group": "visualiser",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "true links, false unlinks"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "view.open",
       "label": "Open view",
       "description": "Open a view: the library, a browse view, the queue, playlists, search, lyrics, the track inspector, the equaliser, settings or the AI playlist dialog.",
@@ -1279,7 +1334,8 @@
         "L",
         "/",
         "Y",
-        "I"
+        "I",
+        "U"
       ]
     },
     {

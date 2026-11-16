@@ -110,7 +110,9 @@ for (const { origin } of KNOWN_ORIGINS) {
 }
 
 const readme = await readFile(resolve(root, 'README.md'), 'utf8');
-assert(readme.includes('no analytics — verify with the network tab.'), 'README omits the network-verifiable analytics claim.');
+// README line wraps vary, so whitespace is normalised. The sentence lost its em dash on
+// 2026-11-17 (README house style allows none); the claim it checks is unchanged.
+assert(readme.replace(/\s+/g, ' ').includes('There are no analytics: verify with the network tab.'), 'README omits the network-verifiable analytics claim.');
 
 console.log('PASS — Engine boundary: headless NakliAmp core; pinned Reel ingress; zero direct Mediabunny imports; '
   + `network two-mode: default profile 0 requests, each of ${KNOWN_ORIGINS.length} origins alone reaches only itself`);

@@ -150,6 +150,9 @@ async function run() {
     `Scan indexed ${harness.libraryTracks()} of ${written.length} tracks.`);
 
   const rows = () => [...doc.querySelectorAll('.lib-row')];
+  // A double click plays a row; a single click only selects it, the same rule as
+  // Browse (UX review M4, 2026-11-17). Before that change a single click played.
+  const playRow = row => row.dispatchEvent(new app.MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
   await waitFor(() => rows().length === written.length, 'The library did not list every track.');
   assert(harness.view() === 'library', `After scanning the view is ${harness.view()}.`);
 
@@ -159,8 +162,8 @@ async function run() {
     'The scan missed the nested folder.',
   );
 
-  // 2. Click a track the way a person does, and hear it.
-  rows()[0].click();
+  // 2. Double-click a track the way a person does, and hear it.
+  playRow(rows()[0]);
   await waitFor(() => harness.state().path, 'Clicking a library row loaded nothing.');
   await waitFor(
     () => harness.state().clock.positionS > 0.2,
@@ -240,9 +243,9 @@ async function run() {
   // cannot pass for a fresh one.
   await waitFor(() => harness.state().clock.positionS > 3.0, 'The clock did not advance before the click check.', 20_000);
   const leftAt = harness.state().clock.positionS;
-  rows()[1].click();
+  playRow(rows()[1]);
   await waitFor(() => harness.state().media.name === second, 'Clicking the second row did not switch track.');
-  rows()[0].click();
+  playRow(rows()[0]);
   await waitFor(() => harness.state().media.name === first, 'Clicking the first row did not switch back.');
   // A short window on purpose: a track restarted from zero cannot reach this
   // position within it, so only a real resume can satisfy the wait. Given long
@@ -285,7 +288,7 @@ async function run() {
   // repeating: `advance` awaited an IndexedDB write before discovering there
   // was no next track, so a finished last track wrote to the database on every
   // animation frame for as long as the tab stayed open.
-  rows().at(-1).click();
+  playRow(rows().at(-1));
   await waitFor(() => harness.state().clock.playing && harness.state().media.duration > 4,
     'The last track did not start.');
   await waitFor(() => harness.queue().index === harness.queue().length - 1,

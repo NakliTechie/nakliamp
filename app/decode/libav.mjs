@@ -12,6 +12,8 @@
 // Loading is lazy and happens once: the module is only instantiated when a file
 // actually needs it, so a library of MP3s never pays for it.
 
+import { createStreamOpener, shouldStream } from './libav-stream.mjs';
+
 const VENDOR_DIR = '../../vendor/libav/';
 const LOADER_FILE = 'libav-6.10.9.0-nakliamp.loader.mjs';
 const FACTORY_FILE = 'libav-6.10.9.0-nakliamp.wasm.mjs';
@@ -384,9 +386,25 @@ export function libavInstance() {
   return startLibav();
 }
 
-/** The decoder entry the engine's `softwareDecoders` list expects. */
+/**
+ * Open a file for streamed decode: DSD always, other containers above 64 MB.
+ *
+ * The whole-file path above holds the input, its copy in the wasm filesystem
+ * and the decoded output at once, which a long DSD track cannot afford. This
+ * one reads the file a slice at a time and resamples inside libav; see
+ * libav-stream.mjs. Its input has no size bound, because nothing is read whole.
+ */
+export const streamLibav = createStreamOpener({ instance: startLibav, error: decodeError });
+
+/**
+ * The decoder entry the engine's `softwareDecoders` list expects.
+ * `streams` and `stream` are optional for a decoder; the engine uses them for
+ * the files `streams(container, size)` claims and decodes the rest whole.
+ */
 export const libavDecoder = Object.freeze({
   name: 'libav wasm',
   sniff: sniffLibav,
   decode: decodeLibav,
+  streams: shouldStream,
+  stream: streamLibav,
 });

@@ -102,9 +102,10 @@ export function skinFileProblem(file) {
   return null;
 }
 
-// A skin must carry its own main window, title bar and playlist art, so the face
-// never falls back to the base skin bundled inside Webamp (coordinator decision).
-export const REQUIRED_SKIN_PARTS = Object.freeze(['MAIN.BMP', 'TITLEBAR.BMP', 'PLEDIT.BMP']);
+// The vendored Webamp bundle carries neutral fallback art drawn by
+// scripts/patch-webamp-skin.mjs (Chirag, 2026-11-17), so a skin may leave out any
+// sheet. It must still carry its own main window, or nothing of it would show.
+export const REQUIRED_SKIN_PARTS = Object.freeze(['MAIN.BMP']);
 const MAX_ZIP_ENTRIES = 4096;
 
 /**
@@ -149,7 +150,7 @@ export function skinContentProblem(buffer) {
   try { names = zipEntryNames(buffer); } catch (error) { return error.message; }
   const missing = missingSkinParts(names);
   if (!missing.length) return null;
-  return `This skin lacks ${missing.join(', ')}, so NakliAmp will not show it: a classic skin needs its own main window, title bar and playlist images.`;
+  return `This skin lacks ${missing.join(', ')}, so NakliAmp will not show it: a classic skin needs at least its own main window image.`;
 }
 
 /**
@@ -503,7 +504,7 @@ const CSS = `
 .nk-skinface-status { font-size: 12px; color: var(--muted); min-height: 1.2em; }
 .nk-skinface-stage { position: relative; min-height: 380px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; overflow: hidden; }
-.nk-skinface-stage:empty::after { content: 'No skin loaded.'; position: absolute; inset: 0; display: grid;
+.nk-skinface-stage:empty::after { content: 'No skin loaded. Drop a .wsz file here, or choose one above.'; position: absolute; inset: 0; display: grid;
   place-items: center; color: var(--muted); font-size: 13px; }
 `;
 
@@ -523,9 +524,18 @@ export function mountWebampFace(root, ctx, { loadWebamp = () => import(WEBAMP_MO
   const closeButton = h('button', { type: 'button', hidden: true, onClick: () => unload() }, 'Close the skin face');
   root.append(h('section', { className: 'nk-skinface', 'aria-label': 'Classic skin face' },
     h('p', {}, 'Play your queue through a classic skin (.wsz) from your own disk. NakliAmp ships no skins, and the sound still comes from NakliAmp: its decoder, gapless playback, ReplayGain and equaliser.'),
+    h('p', {}, 'Classic skins are shared freely online, for example in the skin museum at skins.webamp.org. Save a .wsz file, then choose it here or drop it on the box below.'),
     h('div', { className: 'nk-skinface-bar' }, pick, closeButton, input),
     status,
     stage));
+
+  // Dropping a .wsz on the stage loads it, like choosing it with the button.
+  stage.addEventListener('dragover', event => { event.preventDefault(); });
+  stage.addEventListener('drop', event => {
+    event.preventDefault();
+    const file = event.dataTransfer?.files?.[0];
+    if (file) load(file);
+  });
 
   let webamp = null;
   let bridge = null;

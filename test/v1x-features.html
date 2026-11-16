@@ -889,13 +889,29 @@ async function run() {
     picker.dispatchEvent(new app.Event('change', { bubbles: true }));
   };
 
-  await check('V5: a skin without PLEDIT.BMP is refused by name', async () => {
+  await check('V5: a skin without MAIN.BMP is refused by name', async () => {
     await harness.run('view.skins');
     const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-skinface'), 'The skin dialog did not open.');
-    await pickSkin(panel, zip(skinParts.slice(0, 2)), 'Partial.wsz');
-    await waitFor(() => /PLEDIT\.BMP/.test(panel.querySelector('[role=status]').textContent),
+    await pickSkin(panel, zip(skinParts.slice(1)), 'NoMain.wsz');
+    await waitFor(() => /MAIN\.BMP/.test(panel.querySelector('[role=status]').textContent),
       () => `Status: "${panel.querySelector('[role=status]').textContent}".`);
-    assert(!$('#webamp'), 'Webamp mounted for an incomplete skin.');
+    assert(!$('#webamp'), 'Webamp mounted for a skin without its main window.');
+    await closeDialogs();
+  });
+
+  await check('V5: a skin with only MAIN.BMP mounts on the neutral fallback art', async () => {
+    await harness.run('view.skins');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-skinface'), 'The skin dialog did not open.');
+    await pickSkin(panel, zip(skinParts.slice(0, 1)), 'MainOnly.wsz');
+    await waitFor(() => /Skin: MainOnly\.wsz/.test(panel.querySelector('[role=status]').textContent),
+      () => `Status: "${panel.querySelector('[role=status]').textContent}".`, 30_000);
+    const title = await waitFor(() => $('#webamp #title-bar'), 'Webamp has no title bar.');
+    const art = app.getComputedStyle(title).backgroundImage;
+    assert(/^url\("?data:image\/png;base64,/.test(art), `The title bar has no fallback art: ${art.slice(0, 60)}.`);
+    const play = $('#webamp .actions #play');
+    assert(play && app.getComputedStyle(play).backgroundImage.startsWith('url('), 'The play button has no fallback art.');
+    await closeDialogs();
+    await waitFor(() => !$('#webamp'), 'Webamp stayed mounted after the dialog closed.');
   });
 
   await check('V5: a complete skin mounts and its play button runs player.play', async () => {

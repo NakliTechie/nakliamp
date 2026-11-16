@@ -29,6 +29,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   speed: 1,
   mono: false,
   outputDeviceId: '',
+  // Scale the visualiser's input by the volume (cliamp's volume-linked visualiser).
+  visualiserLinkVolume: false,
 });
 
 const ENUMS = {
@@ -65,6 +67,7 @@ const SCALAR_FIELDS = {
   speed: (v, cur) => (isNum(v) ? Math.round(clamp(v, 0.5, 2) * 100) / 100 : cur),
   mono: (v, cur) => bool(v, cur),
   outputDeviceId: (v, cur) => (typeof v === 'string' && v.length <= 256 ? v : cur),
+  visualiserLinkVolume: (v, cur) => bool(v, cur),
 };
 
 function mergeEq(eq, patchEq) {

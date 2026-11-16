@@ -1,4 +1,5 @@
-// The classic skin face refuses a .wsz that lacks its own main, title bar and playlist art.
+// The classic skin face refuses a .wsz without its own main window art; any other
+// missing sheet falls back to the neutral art patched into the vendored bundle.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { zipEntryNames, missingSkinParts, skinContentProblem } from '../app/ui/webamp-face.mjs';
@@ -49,9 +50,16 @@ test('a complete skin passes, case-insensitive and inside a folder', () => {
   assert.deepEqual(missingSkinParts(['MAIN.BMP', 'x\\TITLEBAR.BMP', 'PLEDIT.BMP']), []);
 });
 
-test('a partial skin is refused by naming what it lacks', () => {
-  const problem = skinContentProblem(zipOf(['main.bmp', 'cbuttons.bmp']));
-  assert.match(problem, /TITLEBAR\.BMP, PLEDIT\.BMP/);
+test('a skin with only its main window passes; the rest falls back to neutral art', () => {
+  assert.equal(skinContentProblem(zipOf(['main.bmp'])), null);
+  assert.equal(skinContentProblem(zipOf(['Skin/MAIN.BMP', 'cbuttons.bmp'])), null);
+  assert.deepEqual(missingSkinParts(['MAIN.BMP']), []);
+});
+
+test('a skin without MAIN.BMP is refused by naming it', () => {
+  const problem = skinContentProblem(zipOf(['titlebar.bmp', 'pledit.bmp', 'cbuttons.bmp']));
+  assert.match(problem, /lacks MAIN\.BMP/);
+  assert.match(skinContentProblem(zipOf(['readme.txt'])), /MAIN\.BMP/);
 });
 
 test('bytes that are not a zip are refused in plain words', () => {
