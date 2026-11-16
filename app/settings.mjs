@@ -24,6 +24,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   visualiser: 'bars',
   miniPlayer: false,
   seekStepS: 5,
+  // v1.x: volume floor in dB (S5), playback speed (P9), mono downmix (P11), output device (S6).
+  volumeFloorDb: -50,
+  speed: 1,
+  mono: false,
+  outputDeviceId: '',
 });
 
 const ENUMS = {
@@ -56,6 +61,10 @@ const SCALAR_FIELDS = {
   visualiser: (v, cur) => (typeof v === 'string' && /^[\w-]{1,40}$/.test(v) ? v : cur),
   miniPlayer: (v, cur) => bool(v, cur),
   seekStepS: (v, cur) => num(v, 1, 60, cur),
+  volumeFloorDb: (v, cur) => num(v, -90, -1, cur),
+  speed: (v, cur) => (isNum(v) ? Math.round(clamp(v, 0.5, 2) * 100) / 100 : cur),
+  mono: (v, cur) => bool(v, cur),
+  outputDeviceId: (v, cur) => (typeof v === 'string' && v.length <= 256 ? v : cur),
 };
 
 function mergeEq(eq, patchEq) {

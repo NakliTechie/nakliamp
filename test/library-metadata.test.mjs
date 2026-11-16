@@ -212,3 +212,26 @@ test('a freeform atom with an oversized part is skipped, not read', async () => 
   const tags = await readTags(mp4(big));
   assert.equal(tags.replayGain, null);
 });
+
+// Durations for MP3 and WAV (PARSER_VERSION 4): the duplicate finder (L14) and
+// LRCLIB (T9) need a length from the index for files that have not played.
+test('MP3 duration: Xing frame count, else bytes over the first frame bitrate', async () => {
+  // 0xff 0xfb 0x90 0x00: MPEG-1 Layer III, 128 kbit/s, 44.1 kHz, stereo, so the Xing tag sits 4 + 32 bytes in.
+  const xing = concat(MPEG, new Uint8Array(32), 'Xing', be32(1), be32(100), new Uint8Array(400));
+  const vbr = await readTags(new Blob([concat(id3([['TIT2', concat(u8(3), 'X')]]), xing)]));
+  assert.ok(Math.abs(vbr.durationS - (100 * 1152) / 44100) < 1e-9, `Xing duration ${vbr.durationS}`);
+  assert.equal(vbr.sampleRate, 44100);
+  const audio = concat(MPEG, new Uint8Array(16_000 - 4));
+  const cbr = await readTags(new Blob([concat(id3([['TIT2', concat(u8(3), 'C')]]), audio)]));
+  assert.ok(Math.abs(cbr.durationS - (16_000 * 8) / 128_000) < 1e-9, `CBR duration ${cbr.durationS}`);
+  assert.ok(PARSER_VERSION >= 4);
+});
+
+test('WAV duration: data bytes over the byte rate', async () => {
+  const fmt = concat('fmt ', le32(16), u8(1, 0, 2, 0), le32(48000), le32(192000), u8(4, 0, 16, 0));
+  const data = concat('data', le32(96000), new Uint8Array(96000));
+  const body = concat('WAVE', fmt, data);
+  const tags = await readTags(new Blob([concat('RIFF', le32(body.length), body)]));
+  assert.equal(tags.durationS, 0.5);
+  assert.equal(tags.byteRate, undefined);
+});

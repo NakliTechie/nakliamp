@@ -16,6 +16,7 @@ const PALETTE = Object.freeze({
   muted: '#9d9180',
   dim: 'rgba(157,145,128,0.18)',
   text: '#efe8da',
+  petal: '#e9a6b4',
 });
 
 /**
@@ -38,6 +39,9 @@ export function createVisualiser({
   milkdropFactory = createMilkdrop,
   milkdropSupport = checkSupport,
   now = () => performance.now(),
+  // Seeds the modes' random streams; modes never call Math.random, so a fixed
+  // seed and the same audio give the same pictures.
+  seed = 0x5eed1e55,
 }) {
   const context = canvas.getContext('2d');
   let mode = MODES[0];
@@ -175,7 +179,8 @@ export function createVisualiser({
       sampleAnalysers();
       resize();
       drawFrame(mode, {
-        context, freq, wave, freqLeft, freqRight, palette, memory,
+        context, freq, wave, freqLeft, freqRight, palette, memory, seed,
+        reduced: reducedMotion(),
         width: canvas.width, height: canvas.height,
       });
     } catch (error) {

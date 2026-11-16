@@ -81,12 +81,12 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // -------------------------------------------------------- registry ----
 
-test('Milkdrop is registered after the 14 drawn modes and before None', () => {
+test('Milkdrop is registered after the 29 drawn modes and before None', () => {
   assert.ok(MODE_IDS.includes('milkdrop'));
   const index = MODE_IDS.indexOf('milkdrop');
   assert.equal(MODES[index].label, 'Milkdrop');
-  assert.equal(MODES.slice(0, index).filter(mode => mode.draw).length, 14, 'the 14 drawn modes come first');
-  assert.equal(MODE_IDS[index - 1], 'matrix');
+  assert.equal(MODES.slice(0, index).filter(mode => mode.draw).length, 29, 'the 29 drawn modes come first');
+  assert.equal(MODE_IDS[index - 1], 'stereo');
   assert.equal(MODE_IDS[index + 1], 'none');
   assert.equal(isAnimated(modeById('milkdrop')), true);
   assert.equal(isAnimated(modeById('none')), false);
@@ -320,7 +320,7 @@ function fakeMilkdropFactory() {
   return { factory, log };
 }
 
-test('v cycles from Matrix into Milkdrop, which renders through its own path', () => {
+test('v cycles from Stereo into Milkdrop, which renders through its own path', () => {
   const scheduler = fakeScheduler();
   try {
     const { factory, log } = fakeMilkdropFactory();
@@ -329,7 +329,7 @@ test('v cycles from Matrix into Milkdrop, which renders through its own path', (
       canvas: fakeCanvas(), getAnalyser: () => analyser,
       milkdropFactory: factory, milkdropSupport: okSupport, now: clock(),
     });
-    visualiser.setMode('matrix');
+    visualiser.setMode('stereo');
     assert.equal(visualiser.cycle(1), 'milkdrop');
     assert.ok(visualiser.modes().some(mode => mode.id === 'milkdrop' && mode.label === 'Milkdrop'));
     assert.equal(visualiser.running, true);

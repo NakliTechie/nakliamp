@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp v1.x feature gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:860px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// v1.x feature gate: every v1.x row of docs/specs/nakliamp-parity-001.md that a
+// browser can check, driven through the real page in an iframe, the way
+// test/v1-features.html drives the v1 rows.
+//
+// The music folder is an OPFS directory named `nakliamp-v1x-harness`, built here
+// from the committed fixtures and from tones generated here. A second OPFS folder,
+// `nakliamp-v1x-second`, is added and forgotten (L13).
+//
+// No request leaves the page: the network rows run first with every origin off,
+// then with window.fetch stubbed inside the iframe, so MusicBrainz, the Cover Art
+// Archive, LRCLIB and ListenBrainz get stub replies. The real services are never
+// contacted. No download reaches the disk: the anchor click that hands a file over
+// is captured in the iframe.
+//
+// Each check runs even when an earlier one failed. The gate passes only when every
+// check passes and the page logged no console error or unhandled rejection. No
+// timing assertions: waits are generous, and only outcomes and ratios are checked.
+
+import { readTags } from '../app/library/metadata.mjs';
+import { eqGains } from '../app/audio/eq-presets.mjs';
+import { COMMANDS } from '../app/commands/commands.mjs';
+
+const FOLDER = 'nakliamp-v1x-harness';
+const SECOND = 'nakliamp-v1x-second';
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const passed = [];
+const failed = [];
+const notes = {};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await sleep(40);
+  }
+  throw new Error(typeof message === 'function' ? await message() : message);
+}
+
+async function check(id, fn) {
+  try {
+    await fn();
+    passed.push(id);
+  } catch (error) {
+    failed.push(`${id}: ${String(error?.message ?? error).slice(0, 700)}`);
+  }
+}
+
+// ------------------------------------------------------------- fixtures ----
+
+const enc = new TextEncoder();
+const synchsafe = n => [(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127];
+const id3Frame = (id, body) => [...enc.encode(id), ...synchsafe(body.length), 0, 0, ...body];
+const textFrame = (id, value) => id3Frame(id, [3, ...enc.encode(value)]);
+
+/** An ID3v2.4 tag in front of the MP3 fixture's audio (its own small tag removed). */
+function taggedMp3(audio, frames) {
+  const bytes = new Uint8Array(audio);
+  let start = 0;
+  if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    start = 10 + ((bytes[6] << 21) | (bytes[7] << 14) | (bytes[8] << 7) | bytes[9]);
+  }
+  const body = frames.flat();
+  const header = [0x49, 0x44, 0x33, 4, 0, 0, ...synchsafe(body.length)];
+  return new Uint8Array([...header, ...body, ...bytes.subarray(start)]);
+}
+
+function toneWav(seconds, frequency = 440) {
+  const rate = 44100;
+  const frames = rate * seconds;
+  const bytes = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => [...text].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) {
+    view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * frequency * 2 * Math.PI) * 9000), true);
+  }
+  return bytes;
+}
+
+/** A WAV with a LIST INFO chunk (INAM title, IART artist) before its data. */
+function taggedWav(seconds, frequency, { title, artist }) {
+  const wav = new Uint8Array(toneWav(seconds, frequency));
+  const field = (id, value) => {
+    const text = [...enc.encode(value), 0];
+    if (text.length % 2) text.push(0);
+    return [...enc.encode(id), text.length & 255, (text.length >> 8) & 255, 0, 0, ...text];
+  };
+  const info = [...enc.encode('INFO'), ...field('INAM', title), ...field('IART', artist)];
+  const list = new Uint8Array([...enc.encode('LIST'), info.length & 255, (info.length >> 8) & 255, 0, 0, ...info]);
+  const out = new Uint8Array(wav.length + list.length);
+  out.set(wav.subarray(0, 36));
+  out.set(list, 36);
+  out.set(wav.subarray(36), 36 + list.length);
+  new DataView(out.buffer).setUint32(4, out.length - 8, true);
+  return out;
+}
+
+async function writeFile(directory, name, data) {
+  const handle = await directory.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(data);
+  await writable.close();
+}
+
+async function fixture(name) {
+  const response = await fetch(`fixtures/${name}`);
+  assert(response.ok, `Fixture ${name} did not load (${response.status}).`);
+  return response.arrayBuffer();
+}
+
+// A cue sheet that splits the 5 s image at 2.5 s (frame 38 of 75 is 0.507 s).
+const CUE = [
+  'REM GENRE ""',
+  'PERFORMER "Cue Artist"',
+  'TITLE "Cue Album"',
+  'FILE "Cue Image.wav" WAVE',
+  '  TRACK 01 AUDIO',
+  '    TITLE "Cue One"',
+  '    PERFORMER "Cue Artist"',
+  '    INDEX 01 00:00:00',
+  '  TRACK 02 AUDIO',
+  '    TITLE "Cue Two"',
+  '    PERFORMER "Cue Artist"',
+  '    INDEX 01 00:02:38',
+  '',
+].join('\r\n');
+const CUE_SPLIT_S = 2 + 38 / 75;
+
+async function buildFolders() {
+  const opfs = await navigator.storage.getDirectory();
+  // Delete by name: only this gate's own folders and the tag backups it causes.
+  for (const name of [FOLDER, SECOND, 'nakliamp-tag-backup']) {
+    try { await opfs.removeEntry(name, { recursive: true }); } catch { /* not there */ }
+  }
+  const root = await opfs.getDirectoryHandle(FOLDER, { create: true });
+  const mp3 = await fixture('audio-mp3.mp3');
+
+  const cue = await root.getDirectoryHandle('Cue Album', { create: true });
+  await writeFile(cue, 'Cue Image.wav', toneWav(5, 523));
+  await writeFile(cue, 'Cue Image.cue', CUE);
+
+  const dup = await root.getDirectoryHandle('Dup', { create: true });
+  const dupe = taggedMp3(mp3, [textFrame('TIT2', 'Dupe Song'), textFrame('TPE1', 'Dupe Artist')]);
+  await writeFile(dup, 'Copy A.mp3', dupe);
+  await writeFile(dup, 'Copy B.mp3', dupe);
+
+  const tagged = await root.getDirectoryHandle('Tagged', { create: true });
+  const common = [textFrame('TPE1', 'Harness Artist'), textFrame('TALB', 'V1X Album')];
+  await writeFile(tagged, '01 Alpha.mp3', taggedMp3(mp3, [textFrame('TIT2', 'Alpha'), ...common, textFrame('TRCK', '1')]));
+  await writeFile(tagged, '02 Beta.mp3', taggedMp3(mp3, [textFrame('TIT2', 'Beta'), ...common, textFrame('TRCK', '2')]));
+
+  await writeFile(root, 'Long Tone.wav', toneWav(40, 330));
+  // Tagged and over 30 s, so ListenBrainz's rules let it count (I1).
+  await writeFile(root, 'Scrobble Song.wav', taggedWav(36, 262, { title: 'Scrobble Song', artist: 'Harness Artist' }));
+  const lane = await root.getDirectoryHandle('Lane', { create: true });
+  await writeFile(lane, 'Lane A.wav', toneWav(3, 392));
+  await writeFile(lane, 'Lane B.wav', toneWav(14, 494));
+
+  const second = await opfs.getDirectoryHandle(SECOND, { create: true });
+  await writeFile(second, 'Second Song.mp3', taggedMp3(mp3, [textFrame('TIT2', 'Second Song'), textFrame('TPE1', 'Second Artist')]));
+  return { root, second, mp3 };
+}
+
+async function folderFile(directory, path) {
+  const segments = path.split('/');
+  const name = segments.pop();
+  try {
+    let dir = directory;
+    for (const segment of segments) dir = await dir.getDirectoryHandle(segment);
+    return await (await dir.getFileHandle(name)).getFile();
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------- a classic skin in memory ----
+
+/** A 24-bit BMP of one colour with a diagonal band, so the image is not flat. */
+function bmp(width, height, [r, g, b]) {
+  const row = Math.ceil((width * 3) / 4) * 4;
+  const size = 54 + row * height;
+  const bytes = new Uint8Array(size);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x42; bytes[1] = 0x4d;
+  view.setUint32(2, size, true); view.setUint32(10, 54, true); view.setUint32(14, 40, true);
+  view.setInt32(18, width, true); view.setInt32(22, height, true);
+  view.setUint16(26, 1, true); view.setUint16(28, 24, true); view.setUint32(34, row * height, true);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = 54 + y * row + x * 3;
+      const band = (x + y) % 16 < 3;
+      bytes[at] = band ? 255 - b : b; bytes[at + 1] = band ? 255 - g : g; bytes[at + 2] = band ? 255 - r : r;
+    }
+  }
+  return bytes;
+}
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** A stored (uncompressed) zip of `[name, bytes]` entries. */
+function zip(entries) {
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, data] of entries) {
+    const nameBytes = enc.encode(name);
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(8, 0, true);
+    lv.setUint16(12, 0x21, true); lv.setUint32(14, crc, true); lv.setUint32(18, data.length, true);
+    lv.setUint32(22, data.length, true); lv.setUint16(26, nameBytes.length, true);
+    local.set(nameBytes, 30);
+    const head = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(head.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(14, 0x21, true); cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true);
+    cv.setUint32(24, data.length, true); cv.setUint16(28, nameBytes.length, true); cv.setUint32(42, offset, true);
+    head.set(nameBytes, 46);
+    parts.push(local, data);
+    central.push(head);
+    offset += local.length + data.length;
+  }
+  const centralSize = central.reduce((n, part) => n + part.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, centralSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end], { type: 'application/zip' });
+}
+
+// ------------------------------------------------------------------ run ----
+
+async function run() {
+  const { root, second, mp3 } = await buildFolders();
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  notes.pageErrorGuard = app.__errs ? 'runner guard' : 'installed after boot';
+  if (!app.__errs) {
+    app.__errs = [];
+    const original = app.console.error.bind(app.console);
+    app.console.error = (...args) => { app.__errs.push(args.map(String).join(' ')); original(...args); };
+    app.addEventListener('error', event => app.__errs.push(`error: ${event.message}`));
+    app.addEventListener('unhandledrejection', event => app.__errs.push(`rejection: ${event.reason?.stack ?? event.reason}`));
+  }
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+  const $ = selector => doc.querySelector(selector);
+  const frameTick = () => new Promise(resolve => app.requestAnimationFrame(() => app.requestAnimationFrame(resolve)));
+  const input = (element, value) => { element.value = value; element.dispatchEvent(new app.Event('input', { bubbles: true })); };
+  const tracks = () => harness.tracks();
+  const byTitle = title => tracks().find(track => track.title === title || track.name?.startsWith(title));
+  const idOf = title => { const track = byTitle(title); assert(track, `No track titled ${title} in the index.`); return track.id; };
+  const state = () => harness.state();
+  const pos = () => state().clock.positionS;
+  const closeDialogs = async () => { await harness.run('view.close'); await frameTick(); };
+  const dialogRoot = () => $('.nk-dlg');
+  const button = (scope, text) => [...(scope ?? doc).querySelectorAll('button')].find(node => node.textContent.trim() === text);
+  const loadQueue = async (titles, { play = false, startIndex = 0 } = {}) => {
+    await harness.run('queue.set', { ids: titles.map(idOf), startIndex, play });
+    const want = idOf(titles[startIndex]);
+    await waitFor(() => harness.playingId() === want && state().media.duration > 0,
+      () => `Queue start did not load ${titles[startIndex]} (playing ${harness.playingId()}, status ${state().status}).`, 20_000);
+  };
+  /** Approve the confirm dialog a destructive command opened. */
+  const approve = async label => {
+    const confirm = await waitFor(() => $('.nk-confirm')?.closest('.nk-dlg'), `No confirm dialog for ${label}.`, 20_000);
+    const primary = confirm.querySelector('button.primary') ?? [...confirm.querySelectorAll('button')].find(node => node.textContent !== 'Cancel');
+    notes.confirmLabels = { ...notes.confirmLabels, [label]: primary.textContent };
+    primary.click();
+  };
+  /** Wall-clock ratio of position change over 2 s while playing (P9). */
+  const clockRatio = async () => {
+    const p0 = pos(); const t0 = performance.now();
+    await sleep(2000);
+    const p1 = pos(); const t1 = performance.now();
+    return (p1 - p0) / ((t1 - t0) / 1000);
+  };
+  const remoteEntries = win => win.performance.getEntriesByType('resource').map(entry => entry.name)
+    .filter(name => !name.startsWith(location.origin) && !/^(data|blob):/.test(name));
+
+  // ---- 0. scan --------------------------------------------------------------
+  await harness.adoptFolder(root);
+  await harness.openLibrary();
+  // 11 records: the cue image (hidden), its 2 tracks, 2 copies, Alpha, Beta, Long Tone, Scrobble Song, Lane A, Lane B.
+  await waitFor(() => harness.libraryTracks() === 11 && tracks().filter(track => track.virtual).length === 2,
+    () => `Scan indexed ${harness.libraryTracks()} records: ${tracks().map(track => track.title || track.name).join(', ')}.`, 30_000);
+  await harness.run('player.volume_db', { db: -30 });
+
+  // ---- P12 cue sheets -------------------------------------------------------
+  await check('P12: a cue sheet shows two tracks and hides the image', async () => {
+    const parts = tracks().filter(track => track.virtual).sort((a, b) => a.virtual.startS - b.virtual.startS);
+    assert(JSON.stringify(parts.map(track => track.title)) === '["Cue One","Cue Two"]', `Virtual tracks: ${JSON.stringify(parts.map(track => track.title))}.`);
+    assert(Math.abs(parts[1].virtual.startS - CUE_SPLIT_S) < 0.02, `Cue Two starts at ${parts[1].virtual.startS}.`);
+    const parent = byTitle('Cue Image');
+    assert(parent?.hidden, `The image is not hidden: ${JSON.stringify(parent)}.`);
+    const visible = harness.visibleTracks().map(track => track.title || track.name);
+    assert(!visible.some(name => /Cue Image/.test(name)) && visible.includes('Cue One') && visible.includes('Cue Two'), `Visible: ${visible.join(', ')}.`);
+    const search = await harness.run('library.search', { query: 'Cue' });
+    const titles = search.items.map(item => item.title).sort();
+    assert(JSON.stringify(titles) === '["Cue One","Cue Two"]', `library.search Cue gave ${JSON.stringify(titles)}.`);
+  });
+
+  await check('P12: Cue Two plays from its own start', async () => {
+    await loadQueue(['Cue One', 'Cue Two'], { startIndex: 1 });
+    const status = await harness.run('player.status');
+    assert(status.track?.title === 'Cue Two', `Status track ${JSON.stringify(status.track)}.`);
+    assert(Math.abs(status.positionS) < 0.3, `Cue Two track time is ${status.positionS}.`);
+    assert(Math.abs(pos() - CUE_SPLIT_S) < 0.3, `The image is at ${pos()} s, expected ${CUE_SPLIT_S}.`);
+    assert(Math.abs(status.durationS - (5 - CUE_SPLIT_S)) < 0.3, `Cue Two lasts ${status.durationS}.`);
+  });
+
+  await check('P12: Cue One advances to Cue Two without a reload', async () => {
+    await loadQueue(['Cue One', 'Cue Two']);
+    const loads = harness.loads();
+    await harness.play();
+    await waitFor(() => harness.playingId() === idOf('Cue Two'),
+      () => `Still on ${harness.playingId()} at ${pos()} s.`, 15_000);
+    assert(harness.loads() === loads, `The UI loaded ${harness.loads() - loads} time(s) at the cue boundary.`);
+    assert(state().clock.playing, 'Playback stopped at the cue boundary.');
+    assert(harness.queueSnapshot().index === 1, `Queue index ${harness.queueSnapshot().index}.`);
+    harness.pause();
+  });
+
+  // ---- L13 a second folder --------------------------------------------------
+  await check('L13: a second folder is added, scanned, listed and forgotten', async () => {
+    const added = await harness.addFolder(second);
+    assert(added.added && added.id, `addFolder gave ${JSON.stringify(added)}.`);
+    await waitFor(() => byTitle('Second Song'), 'Second Song was not indexed.', 20_000);
+    const song = byTitle('Second Song');
+    assert(song.path.startsWith(`//${added.id}/`), `Second Song path ${song.path}.`);
+    const { folders } = await harness.run('library.folders');
+    assert(folders.length === 2 && folders.filter(row => row.primary).length === 1, `Folders: ${JSON.stringify(folders)}.`);
+    harness.openView('music-folders');
+    await waitFor(() => dialogRoot()?.querySelectorAll('[aria-label="Music folders"] > li').length === 2,
+      () => `The folders panel lists ${dialogRoot()?.querySelectorAll('[aria-label="Music folders"] > li').length} rows.`);
+    await closeDialogs();
+    // Play from the second folder: the file is read through its own handle.
+    await loadQueue(['Second Song']);
+    const pending = harness.runAsPerson('library.forget_folder', { id: added.id });
+    await approve('library.forget_folder');
+    await pending;
+    await waitFor(() => !byTitle('Second Song'), 'Second Song is still in the index after forget.', 15_000);
+    const after = await harness.run('library.folders');
+    assert(after.folders.length === 1, `After forget: ${JSON.stringify(after.folders)}.`);
+    assert(await folderFile(second, 'Second Song.mp3'), 'Forget deleted the file on disk.');
+  });
+
+  // ---- L14 duplicates -------------------------------------------------------
+  await check('L14: duplicates found, keep one hides the copy', async () => {
+    const out = await harness.run('library.duplicates');
+    const groups = out.items ?? [];
+    assert(groups.length === 1 && groups[0].kind === 'exact' && groups[0].tracks.length === 2,
+      `library.duplicates: ${JSON.stringify(out).slice(0, 400)}.`);
+    harness.openView('duplicates');
+    const group = await waitFor(() => dialogRoot()?.querySelector('[aria-label="Duplicate groups"] > li'), 'The duplicates panel shows no group.');
+    button(group, 'Keep the chosen copy').click();
+    await waitFor(() => harness.visibleTracks().filter(track => track.title === 'Dupe Song').length === 1,
+      () => `Visible Dupe Song copies: ${harness.visibleTracks().filter(track => track.title === 'Dupe Song').length}.`);
+    assert(tracks().filter(track => track.title === 'Dupe Song').length === 2, 'The index lost a copy.');
+    assert(await folderFile(root, 'Dup/Copy A.mp3') && await folderFile(root, 'Dup/Copy B.mp3'), 'A copy was deleted on disk.');
+    const stored = JSON.parse(app.localStorage.getItem('nakliamp:hidden') ?? '[]');
+    assert(stored.length === 1, `nakliamp:hidden holds ${JSON.stringify(stored)}.`);
+    const search = await harness.run('library.search', { query: 'Dupe' });
+    assert(search.total === 1, `library.search still lists ${search.total} copies.`);
+    await waitFor(() => /No duplicates found/.test(dialogRoot()?.textContent ?? ''), 'The panel still shows the group.');
+    await closeDialogs();
+  });
+
+  // ---- P9 speed -------------------------------------------------------------
+  await check('P9: speed 2x doubles the clock on the normal route', async () => {
+    // Gapless off keeps the track off the lane, on the normal ladder (R1 or R2).
+    await harness.run('sound.gapless', { mode: 'off' });
+    await loadQueue(['Long Tone']);
+    assert(['r1', 'r2', 'r3'].includes(state().path), `Long Tone loaded on ${state().path}.`);
+    await harness.play();
+    await waitFor(() => state().clock.playing && pos() > 0.2, 'Long Tone did not start.', 15_000);
+    const out = await harness.run('player.speed', { rate: 2 });
+    assert(out.speed === 2, `player.speed gave ${JSON.stringify(out)}.`);
+    await waitFor(() => state().clock.rate === 2 && state().dsp.rate === 2, () => `Rate in state: ${state().clock.rate}.`);
+    await sleep(300);
+    const ratio = await clockRatio();
+    notes.speedNormal = { route: state().path, ratio: Number(ratio.toFixed(2)) };
+    assert(ratio > 1.6 && ratio < 2.5, `At 2x the clock moved ${ratio.toFixed(2)} s per second on ${state().path}.`);
+    assert($('#speed').value === '2', `The speed control shows ${$('#speed').value}.`);
+    harness.pause();
+    await harness.run('sound.gapless', { mode: 'albums' });
+  });
+
+  await check('P9: speed 2x on the gapless lane', async () => {
+    await harness.run('sound.gapless', { mode: 'always' });
+    await harness.run('sound.crossfade', { seconds: 0 });
+    await loadQueue(['Lane A', 'Lane B']);
+    await waitFor(() => ['queued', 'gapless'].includes(state().dsp.next), () => `Lane B not handed over: ${JSON.stringify(state().dsp)}.`);
+    const advances = harness.trackAdvances();
+    await harness.play();
+    await waitFor(() => harness.trackAdvances() > advances && harness.playingId() === idOf('Lane B'),
+      () => `No gapless advance into Lane B (dsp ${JSON.stringify(state().dsp)}).`, 15_000);
+    assert(harness.lastAdvance()?.join === 'gapless', `Join ${JSON.stringify(harness.lastAdvance())}.`);
+    await sleep(300);
+    const ratio = await clockRatio();
+    notes.speedLane = { route: state().path, lane: state().dsp.lane, ratio: Number(ratio.toFixed(2)) };
+    assert(ratio > 1.6 && ratio < 2.5, `On the lane at 2x the clock moved ${ratio.toFixed(2)} s per second.`);
+    harness.pause();
+    await harness.run('player.speed', { rate: 1 });
+    await harness.run('sound.gapless', { mode: 'albums' });
+  });
+
+  // ---- P10 stop after current, sleep timer ----------------------------------
+  await check('P10: stop after current stops at the end of the track', async () => {
+    await loadQueue(['Lane A', 'Lane B']);
+    const timer = await harness.run('player.stop_after_current', { on: true });
+    assert(timer.stopAfterCurrent === true, `stop_after_current gave ${JSON.stringify(timer)}.`);
+    await waitFor(() => !$('#timer-chip').hidden && /after this track/.test($('#timer-chip').textContent), 'The timer chip does not show stop after current.');
+    const advances = harness.trackAdvances();
+    await harness.play();
+    await waitFor(() => state().clock.playing, 'Lane A did not start.');
+    await waitFor(async () => !(await harness.run('player.status')).playing && pos() > 2.5,
+      () => `Still playing at ${pos()} s on ${harness.playingId()}.`, 15_000);
+    await sleep(800);
+    assert(harness.playingId() === idOf('Lane A'), `Playback moved on to ${harness.playingId()}.`);
+    assert(harness.trackAdvances() === advances, 'The engine joined the next track.');
+    assert(!state().clock.playing, 'Playback resumed.');
+    assert(harness.timers().stopAfterCurrent === false, 'Stop after current did not disarm.');
+  });
+
+  await check('P10: a short sleep timer stops playback and restores the volume', async () => {
+    await loadQueue(['Long Tone']);
+    await harness.play();
+    await waitFor(() => state().clock.playing, 'Long Tone did not start.');
+    const volume = state().clock.volume;
+    harness.sleepSeconds(2);
+    await waitFor(() => harness.timers().sleep?.mode === 'minutes', 'The sleep timer is not armed.');
+    await waitFor(() => !state().clock.playing, () => `Still playing at ${pos()} s.`, 15_000);
+    assert(harness.timers().sleep === null, `Timer state after: ${JSON.stringify(harness.timers())}.`);
+    await waitFor(() => Math.abs(state().clock.volume - volume) < 1e-3, () => `Volume after the fade is ${state().clock.volume}, was ${volume}.`);
+    assert(/sleep timer paused/i.test($('#toast').textContent), `Toast: "${$('#toast').textContent}".`);
+  });
+
+  // ---- P11 mono -------------------------------------------------------------
+  await check('P11: mono on and off in the dsp state', async () => {
+    const on = await harness.run('sound.mono', { on: true });
+    assert(on.mono === true, `sound.mono gave ${JSON.stringify(on)}.`);
+    await waitFor(() => state().dsp.mono === 'on', () => `dsp.mono is ${state().dsp.mono} on ${state().path} (chain ${state().dsp.chain}).`);
+    await harness.run('sound.mono', { on: false });
+    await waitFor(() => state().dsp.mono === 'off', () => `dsp.mono is ${state().dsp.mono} after off.`);
+  });
+
+  // ---- S5 dB volume ---------------------------------------------------------
+  await check('S5: volume in dB, 2 dB steps and the floor', async () => {
+    let status = await harness.run('player.volume_db', { db: -20 });
+    assert(Math.abs(status.volumeDb - -20) < 0.05, `volumeDb ${status.volumeDb}.`);
+    assert($('#volume-db').textContent === '-20.0 dB', `Label "${$('#volume-db').textContent}".`);
+    await waitFor(() => Math.abs(state().clock.volume - 0.1) < 0.002, () => `Engine gain ${state().clock.volume} for -20 dB.`);
+    status = await harness.run('player.volume_db', { step: -2 });
+    assert(Math.abs(status.volumeDb - -22) < 0.05, `A -2 dB step gave ${status.volumeDb}.`);
+    const floor = await harness.run('sound.volume_floor', { db: -40 });
+    assert(floor.volumeFloorDb === -40, `Floor ${JSON.stringify(floor)}.`);
+    status = await harness.run('player.volume_db', { db: -45 });
+    assert(Math.abs(status.volumeDb - -40) < 0.05, `Below the floor gave ${status.volumeDb}.`);
+    status = await harness.run('player.volume_db', { step: -2 });
+    assert(status.volumeDb === null && $('#volume-db').textContent === 'Muted', `Past the floor: ${status.volumeDb}, "${$('#volume-db').textContent}".`);
+    await waitFor(() => state().clock.volume === 0, () => `Engine gain ${state().clock.volume} when muted by the floor.`);
+    status = await harness.run('player.volume_db', { step: 2 });
+    assert(Math.abs(status.volumeDb - -40) < 0.05, `Stepping up from mute gave ${status.volumeDb}.`);
+    await harness.run('sound.volume_floor', { db: -50 });
+    await harness.run('player.volume_db', { db: -30 });
+  });
+
+  // ---- S6 output device -----------------------------------------------------
+  await check('S6: output device control lists devices, or is hidden or disabled with a reason', async () => {
+    const select = $('#output-device');
+    const devices = await harness.run('sound.devices');
+    notes.outputDevices = { supported: devices.supported, blocked: devices.blocked, count: devices.devices.length };
+    if (!devices.supported) {
+      assert(select.hidden, 'setSinkId is unavailable but the control shows.');
+    } else {
+      assert(!select.hidden && !select.disabled, `Control hidden ${select.hidden}, disabled ${select.disabled}.`);
+      assert(select.options.length === devices.devices.length + 1 && select.options[0].value === '',
+        `The control lists ${select.options.length} options for ${devices.devices.length} devices.`);
+    }
+    // A host page that blocks speaker-selection: stand in for its permissions policy.
+    if (devices.supported) {
+      Object.defineProperty(app.document, 'featurePolicy', { configurable: true, value: { allowsFeature: name => name !== 'speaker-selection' } });
+      try {
+        app.navigator.mediaDevices.dispatchEvent(new app.Event('devicechange'));
+        await waitFor(() => select.disabled && /does not allow/.test(select.title), () => `Blocked: disabled ${select.disabled}, title "${select.title}".`);
+        const outcome = await harness.run('sound.output', { deviceId: '' }).then(() => 'ran', error => error.code);
+        assert(outcome === 'unavailable', `sound.output while blocked gave ${outcome}.`);
+      } finally {
+        delete app.document.featurePolicy;
+        app.navigator.mediaDevices.dispatchEvent(new app.Event('devicechange'));
+      }
+      await waitFor(() => !select.disabled, 'The control stayed disabled after the block lifted.');
+    }
+  });
+
+  // ---- S7 .eqf --------------------------------------------------------------
+  // Downloads are captured in the iframe: nothing is saved to the disk.
+  const downloads = [];
+  const anchorClick = app.HTMLAnchorElement.prototype.click;
+  app.HTMLAnchorElement.prototype.click = function capture() {
+    if (this.download) { downloads.push({ name: this.download, href: this.href }); return; }
+    return anchorClick.call(this);
+  };
+
+  await check('S7: .eqf export then import round-trips the curve', async () => {
+    await harness.run('eq.preset', { preset: 'rock' });
+    await harness.run('eq.enable', { enabled: true });
+    const rock = eqGains({ ...harness.settings().eq, enabled: true });
+    $('#open-sound').click();
+    const sound = await waitFor(() => doc.querySelector('.nk-sound'), 'The Sound panel did not open.');
+    button(sound, 'Export .eqf').click();
+    const saved = await waitFor(() => downloads.find(entry => entry.name.endsWith('.eqf')), 'Export handed over no .eqf.');
+    const bytes = new Uint8Array(await (await app.fetch(saved.href)).arrayBuffer());
+    assert(new TextDecoder().decode(bytes.subarray(0, 27)) === 'Winamp EQ library file v1.1', 'The export has no Winamp header.');
+    await harness.run('eq.preset', { preset: 'flat' });
+    const file = new app.File([bytes], saved.name, { type: 'application/octet-stream' });
+    const picker = sound.querySelector('input[type=file][accept*=".eqf"]');
+    const transfer = new app.DataTransfer();
+    transfer.items.add(file);
+    picker.files = transfer.files;
+    picker.dispatchEvent(new app.Event('change', { bubbles: true }));
+    await waitFor(() => harness.settings().eq.preset === 'custom', () => `After import the preset is ${harness.settings().eq.preset}.`);
+    const back = harness.settings().eq.custom;
+    const worst = Math.max(...rock.map((gain, index) => Math.abs(gain - back[index])));
+    notes.eqfWorstDb = Number(worst.toFixed(2));
+    // A Winamp band byte has 64 steps over 24 dB, so one step is 0.39 dB.
+    assert(worst <= 0.4, `Round trip moved a band by ${worst.toFixed(2)} dB: ${JSON.stringify(rock)} vs ${JSON.stringify(back)}.`);
+    await closeDialogs();
+    await harness.run('eq.enable', { enabled: false });
+  });
+
+  // ---- T5 rename and find-and-replace ---------------------------------------
+  await check('T5: rename preview, then the rename on disk', async () => {
+    const beta = idOf('Beta');
+    harness.openView('rename', [beta]);
+    const preview = await waitFor(() => dialogRoot()?.querySelector('[aria-label="Rename preview"] li'), 'The rename preview is empty.');
+    assert(/02 Beta\.mp3/.test(preview.textContent) && /02 - Beta\.mp3/.test(preview.textContent), `Preview: ${preview.textContent}.`);
+    await closeDialogs();
+    const canMove = typeof app.FileSystemFileHandle?.prototype?.move === 'function';
+    notes.renameOnDisk = canMove;
+    const pending = harness.runAsPerson('tags.rename_files', { ids: [beta], pattern: '%track% - %title%' });
+    const confirm = await waitFor(() => $('.nk-confirm')?.closest('.nk-dlg'), 'No confirm dialog for the rename.');
+    if (canMove) {
+      assert(/02 Beta\.mp3/.test(confirm.textContent) && /02 - Beta\.mp3/.test(confirm.textContent), `Confirm: ${confirm.textContent.slice(0, 300)}.`);
+      confirm.querySelector('button.primary').click();
+      const out = await pending;
+      assert(out.renamed === 1 && !out.failed.length, `Rename result ${JSON.stringify(out)}.`);
+      assert(await folderFile(root, 'Tagged/02 - Beta.mp3') && !(await folderFile(root, 'Tagged/02 Beta.mp3')), 'The file was not renamed on disk.');
+      await waitFor(() => byTitle('Beta')?.path === 'Tagged/02 - Beta.mp3', () => `The index has Beta at ${byTitle('Beta')?.path}.`, 20_000);
+    } else {
+      assert(/cannot rename/.test(confirm.textContent), `No refusal in the confirm: ${confirm.textContent.slice(0, 300)}.`);
+      [...confirm.querySelectorAll('button')].find(node => node.textContent === 'Cancel').click();
+      await pending.catch(() => null);
+    }
+  });
+
+  await check('T5: find and replace previews and writes one file', async () => {
+    const alpha = idOf('Alpha');
+    harness.openView('rename', [alpha]);
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-v1x'), 'The rename panel did not open.');
+    const find = [...panel.querySelectorAll('input[type=text]')].find(node => node.labels?.[0]?.textContent === 'Find');
+    const replace = [...panel.querySelectorAll('input[type=text]')].find(node => node.labels?.[0]?.textContent === 'Replace with');
+    input(find, 'Alpha');
+    input(replace, 'Alfa');
+    await waitFor(() => /Alfa/.test(panel.querySelector('[aria-label="Find and replace preview"]')?.textContent ?? ''),
+      () => `Replace preview: ${panel.querySelector('[aria-label="Find and replace preview"]')?.textContent}.`);
+    await closeDialogs();
+    const pending = harness.runAsPerson('tags.find_replace', { ids: [alpha], find: 'Alpha', replace: 'Alfa', fields: ['title'] });
+    await approve('tags.find_replace');
+    const out = await pending;
+    assert(out.written === 1 && !out.failed.length, `find_replace gave ${JSON.stringify(out)}.`);
+    const tags = await readTags(await folderFile(root, 'Tagged/01 Alpha.mp3'));
+    assert(tags.title === 'Alfa' && tags.album === 'V1X Album', `Re-read tags: ${tags.title} / ${tags.album}.`);
+    await waitFor(() => byTitle('Alfa'), 'The index did not pick up Alfa.', 20_000);
+  });
+
+  // ---- T8 T9 I1 network: consent off ----------------------------------------
+  const calls = [];
+  const realFetch = app.fetch;
+  const SERVICE = /^https:\/\/(musicbrainz\.org|coverartarchive\.org|lrclib\.net|api\.listenbrainz\.org)\//;
+  const MBID = '0f9c3d4e-1111-4a2b-9c3d-2222aaaa3333';
+  const json = body => new app.Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  function stubReply(url) {
+    const { origin, pathname } = new URL(url);
+    if (origin === 'https://musicbrainz.org' && pathname === '/ws/2/release/') {
+      return json({ releases: [{ id: MBID, title: 'V1X Album', date: '2003', country: 'XW', 'track-count': 2, 'artist-credit': [{ name: 'Harness Artist' }] }] });
+    }
+    if (origin === 'https://musicbrainz.org') {
+      return json({ id: MBID, title: 'V1X Album', date: '2003', 'artist-credit': [{ name: 'Harness Artist' }],
+        media: [{ position: 1, 'track-count': 2, tracks: [{ position: 1, number: '1', title: 'Alpha' }, { position: 2, number: '2', title: 'Beta' }] }] });
+    }
+    if (origin === 'https://coverartarchive.org') return new app.Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+    if (origin === 'https://lrclib.net') return json({ id: 7, syncedLyrics: '[00:00.00]Stub line one\n[00:00.50]Stub line two\n' });
+    if (pathname === '/1/validate-token') return json({ valid: true, user_name: 'harness' });
+    return json({ status: 'ok' });
+  }
+  const stubFetch = (url, init = {}) => {
+    const text = String(url);
+    if (!SERVICE.test(text)) return realFetch.call(app, url, init);
+    calls.push({ origin: new URL(text).origin, path: new URL(text).pathname, method: init.method ?? 'GET', auth: new app.Headers(init.headers ?? {}).get('Authorization') });
+    return Promise.resolve(stubReply(text));
+  };
+  const origins = () => [...new Set(calls.map(call => call.origin))];
+
+  await check('T8 T9 I1: with consent off every origin is off and nothing is sent', async () => {
+    harness.openView('network');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-net'), 'The network panel did not open.');
+    const switches = [...panel.querySelectorAll('input[role=switch]')];
+    assert(switches.length === 4 && switches.every(box => !box.checked), `Switches: ${switches.map(box => box.checked).join(', ')}.`);
+    assert(/sends nothing until you turn a provider on/i.test(panel.textContent), 'The panel does not say nothing is sent.');
+    const list = await harness.run('network.list');
+    assert(list.origins.length === 4 && list.origins.every(row => !row.granted), `network.list: ${JSON.stringify(list.origins.map(row => [row.origin, row.granted]))}.`);
+    await closeDialogs();
+    app.fetch = stubFetch;
+    const outcomes = {};
+    for (const [name, args] of [
+      ['tags.lookup_musicbrainz', { album: 'V1X Album', artist: 'Harness Artist' }],
+      ['tags.fetch_cover', { mbid: MBID }],
+      ['lyrics.fetch', { id: idOf('Alfa') }],
+      ['scrobble.flush', {}],
+    ]) {
+      outcomes[name] = await harness.run(name, args).then(out => `ran: ${JSON.stringify(out)}`, error => error.code);
+    }
+    notes.consentOff = outcomes;
+    assert(outcomes['tags.lookup_musicbrainz'] === 'unavailable' && outcomes['tags.fetch_cover'] === 'unavailable' && outcomes['lyrics.fetch'] === 'unavailable',
+      `Calls with consent off: ${JSON.stringify(outcomes)}.`);
+    assert(calls.length === 0, `Requests reached fetch: ${JSON.stringify(calls)}.`);
+    const remote = [...remoteEntries(app), ...remoteEntries(window)];
+    assert(!remote.length, `Remote requests: ${remote.join(', ')}.`);
+  });
+
+  // ---- T8 T9 I1 network: consent on, stubbed fetch --------------------------
+  await check('T8: MusicBrainz and the Cover Art Archive reach only their own origins', async () => {
+    harness.openView('network');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-net'), 'The network panel did not open.');
+    for (const box of panel.querySelectorAll('input[role=switch]')) box.click();
+    await waitFor(async () => (await harness.run('network.list')).origins.every(row => row.granted), 'Not every switch granted its origin.');
+    await closeDialogs();
+    calls.length = 0;
+    const out = await harness.run('tags.lookup_musicbrainz', { ids: [idOf('Alfa'), idOf('Beta')] });
+    assert(out.mbid === MBID && out.patches.length === 2, `Lookup: ${JSON.stringify(out).slice(0, 300)}.`);
+    const alphaPatch = out.patches.find(row => row.trackId === idOf('Alfa'));
+    assert(alphaPatch?.patch.title === 'Alpha' && alphaPatch.patch.year === 2003, `Patch for Alfa: ${JSON.stringify(alphaPatch)}.`);
+    assert(JSON.stringify(origins()) === '["https://musicbrainz.org"]', `MusicBrainz lookup reached ${JSON.stringify(origins())}.`);
+    calls.length = 0;
+    const cover = await harness.run('tags.fetch_cover', { mbid: MBID });
+    assert(cover?.bytes === 4 && cover.dataUrl.startsWith('data:image/jpeg'), `Cover: ${JSON.stringify(cover).slice(0, 200)}.`);
+    assert(JSON.stringify(origins()) === '["https://coverartarchive.org"]', `Cover fetch reached ${JSON.stringify(origins())}.`);
+  });
+
+  await check('T9: LRCLIB lyrics reach only lrclib.net', async () => {
+    calls.length = 0;
+    const lyrics = await harness.run('lyrics.fetch', { id: idOf('Alfa') });
+    assert(lyrics?.synced && lyrics.lines.some(line => line.text === 'Stub line two'), `Lyrics: ${JSON.stringify(lyrics).slice(0, 200)}.`);
+    assert(JSON.stringify(origins()) === '["https://lrclib.net"]', `LRCLIB fetch reached ${JSON.stringify(origins())}.`);
+    assert(calls[0].path === '/api/get', `LRCLIB path ${calls[0].path}.`);
+  });
+
+  await check('I1: a ListenBrainz scrobble reaches only api.listenbrainz.org', async () => {
+    calls.length = 0;
+    harness.openView('network');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-net'), 'The network panel did not open.');
+    const token = panel.querySelector('input[type=password]');
+    input(token, 'harness-token-0000');
+    button(panel, 'Save token').click();
+    await waitFor(() => /Token saved/.test(panel.textContent), 'The token was not saved.');
+    button(panel, 'Validate').click();
+    await waitFor(() => calls.some(call => call.path === '/1/validate-token'), 'Validate sent nothing.');
+    await waitFor(() => /harness/.test(panel.querySelector('[role=status]:not(:empty)')?.textContent ?? '') || /for harness/.test(panel.textContent), 'The panel did not show the user name.');
+    assert(!panel.textContent.includes('harness-token-0000'), 'The panel shows the token.');
+    await closeDialogs();
+    // 36 s tagged tone at 2x: the half-track rule fires after 18 s of track time.
+    // The track loads after the token is saved, the way a person starts the next song.
+    await harness.run('player.speed', { rate: 2 });
+    await loadQueue(['Scrobble Song']);
+    await harness.seek(0);
+    await harness.play();
+    await waitFor(() => calls.some(call => call.path === '/1/submit-listens' && call.method === 'POST'),
+      async () => `No scrobble after ${pos().toFixed(1)} s of Scrobble Song (calls ${JSON.stringify(calls)}, status ${JSON.stringify(await harness.run('scrobble.status'))}).`, 30_000);
+    harness.pause();
+    await harness.run('player.speed', { rate: 1 });
+    assert(JSON.stringify(origins()) === '["https://api.listenbrainz.org"]', `ListenBrainz reached ${JSON.stringify(origins())}.`);
+    assert(calls.every(call => call.auth === 'Token harness-token-0000'), `Auth headers: ${JSON.stringify(calls.map(call => call.auth))}.`);
+    const status = await harness.run('scrobble.status');
+    assert(status.on && status.tokenSet && status.queued === 0, `scrobble.status: ${JSON.stringify(status)}.`);
+  });
+
+  await check('T8 T9 I1: revoking every origin stops requests, and no request left the page', async () => {
+    harness.openView('network');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-net'), 'The network panel did not open.');
+    button(panel, 'Forget token').click();
+    for (const box of panel.querySelectorAll('input[role=switch]')) if (box.checked) box.click();
+    await waitFor(async () => (await harness.run('network.list')).origins.every(row => !row.granted), 'Not every origin was revoked.');
+    await closeDialogs();
+    calls.length = 0;
+    const outcome = await harness.run('lyrics.fetch', { id: idOf('Alfa') }).then(() => 'ran', error => error.code);
+    assert(outcome === 'unavailable' && calls.length === 0, `After revoke: ${outcome}, ${calls.length} requests.`);
+    app.fetch = realFetch;
+    const remote = [...remoteEntries(app), ...remoteEntries(window)];
+    assert(!remote.length, `Remote requests: ${remote.join(', ')}.`);
+  });
+  app.fetch = realFetch;
+
+  // ---- Q2 more like this ----------------------------------------------------
+  await check('Q2: more like this queues candidates from the playing track', async () => {
+    await loadQueue(['Alfa']);
+    const before = harness.queueSnapshot().ids.slice();
+    const out = await harness.run('queue.more_like_this', { length: 5 });
+    const after = harness.queueSnapshot().ids;
+    assert(out.added >= 1 && out.ids.length === out.added, `more_like_this gave ${JSON.stringify(out)}.`);
+    assert(after.length === before.length + out.added && out.ids.every(id => after.includes(id) && !before.includes(id)), `Queue ${JSON.stringify(after)}.`);
+    const visible = new Set(harness.visibleTracks().map(track => track.id));
+    assert(out.ids.every(id => visible.has(id)), 'A candidate is not a listed library track.');
+    assert(out.ids.includes(idOf('Beta')), `Beta (same album) is not among ${JSON.stringify(out.ids)}.`);
+    notes.moreLikeThis = { path: out.path, added: out.added };
+  });
+
+  // ---- Q3 genre fill with a stubbed host model ------------------------------
+  await check('Q3: genre suggestions from a stubbed model; only the approved one is written', async () => {
+    const original = app.naklios;
+    const bodies = [];
+    app.naklios = {
+      capabilities: { hosted: true, ai: true },
+      ai: { chat: { completions: { create: async body => {
+        bodies.push(body);
+        const table = body.messages[1].content;
+        const idFor = album => Number(new RegExp(`(\\d+) \\| [^|]+ \\| ${album}`).exec(table)?.[1]);
+        return { choices: [{ message: { content: JSON.stringify({ albums: [{ id: idFor('Cue Album'), genre: 'Jazz' }, { id: idFor('V1X Album'), genre: 'Ambient' }] }) } }] };
+      } } } },
+    };
+    try {
+      harness.openView('genre-fill');
+      const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-ai-tools'), 'The genre panel did not open.');
+      const ask = button(panel, 'Suggest genres');
+      await waitFor(() => !ask.disabled, () => `Suggest is disabled: ${panel.textContent.slice(0, 200)}.`);
+      ask.click();
+      const rows = await waitFor(() => { const list = [...panel.querySelectorAll('[aria-label="Suggested genres"] > li')]; return list.length === 2 && list; },
+        () => `Suggestions: ${panel.textContent.slice(0, 300)}.`);
+      assert(bodies.length === 1 && !/\.mp3|\.wav|Tagged\//.test(JSON.stringify(bodies[0])), 'The model request carries file paths.');
+      const cueRow = rows.find(row => row.textContent.includes('Cue Album'));
+      cueRow.querySelector('input[type=checkbox]').click();
+      button(panel, 'Write genres to 1 album').click();
+      await approve('genres');
+      await waitFor(async () => (await readTags(await folderFile(root, 'Tagged/01 Alpha.mp3'))).genre === 'Ambient', 'Alfa did not get Ambient.', 20_000);
+      const betaTags = await readTags(await folderFile(root, byTitle('Beta').path));
+      assert(betaTags.genre === 'Ambient', `Beta genre ${betaTags.genre}.`);
+      const image = await readTags(await folderFile(root, 'Cue Album/Cue Image.wav')).catch(() => ({}));
+      assert(!image.genre, `The unapproved album got a genre: ${image.genre}.`);
+      await waitFor(() => byTitle('Alfa')?.genre === 'Ambient', 'The index did not pick up the genre.', 20_000);
+      assert(!byTitle('Cue One').genre, `Cue One genre ${byTitle('Cue One').genre}.`);
+      await closeDialogs();
+    } finally {
+      app.naklios = original;
+    }
+  });
+
+  // ---- Q4 command bar -------------------------------------------------------
+  await check('Q4: the command bar runs a sentence by rules and refuses a destructive command', async () => {
+    doc.body.focus();
+    doc.dispatchEvent(new app.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, metaKey: /Mac/.test(app.navigator.platform), bubbles: true, cancelable: true }));
+    await waitFor(() => harness.dialogName() === 'commands', `Mod+K opened ${harness.dialogName()}.`);
+    const panel = dialogRoot().querySelector('.nk-cmdbar');
+    const field = panel.querySelector('input[type=text]');
+    const form = panel.querySelector('form');
+    input(field, 'Shuffle by albums.');
+    form.requestSubmit();
+    await waitFor(() => panel.querySelector('.ran').textContent.startsWith('Ran:'), () => `Ran line: "${panel.querySelector('.ran').textContent}".`);
+    assert(harness.queueSnapshot().shuffle === 'albums', `Shuffle is ${harness.queueSnapshot().shuffle}.`);
+    assert(/built-in phrases/i.test(panel.querySelector('.path').textContent), `Path line "${panel.querySelector('.path').textContent}".`);
+    button(panel, 'Undo').click();
+    await waitFor(() => harness.queueSnapshot().shuffle === 'off', 'Undo did not turn shuffle off.');
+    // A model that names a destructive command is refused; nothing is deleted.
+    const original = app.naklios;
+    app.naklios = {
+      capabilities: { hosted: true, ai: true },
+      ai: { chat: { completions: { create: async () => ({ choices: [{ message: { content: '{"name":"playlist.delete","input":{"name":"Harness"}}' } }] }) } } },
+    };
+    try {
+      input(field, 'get rid of my harness playlist');
+      form.requestSubmit();
+      await waitFor(() => panel.querySelector('.ran').classList.contains('err') && /does not run it/.test(panel.querySelector('.ran').textContent),
+        () => `Destructive outcome: "${panel.querySelector('.ran').textContent}".`);
+      assert(!$('.nk-confirm'), 'A confirm dialog opened for the refused command.');
+    } finally {
+      app.naklios = original;
+    }
+    await closeDialogs();
+  });
+
+  // ---- N5 WebMCP ------------------------------------------------------------
+  await check('N5: WebMCP registers read and reversible tools only', async () => {
+    const tools = [];
+    const env = { document: { modelContext: { registerTool: async tool => { tools.push(tool); } } }, navigator: {} };
+    const out = await harness.registerWebMcp(env);
+    const scope = Object.fromEntries(COMMANDS.map(command => [command.name, command.scope]));
+    const allowed = COMMANDS.filter(command => command.scope !== 'destructive').map(command => command.name);
+    assert(out.available && tools.length === allowed.length && tools.length === out.registered.length, `Registered ${tools.length} of ${allowed.length}.`);
+    assert(tools.every(tool => scope[tool.name] === 'read' || scope[tool.name] === 'reversible'), 'A destructive tool was registered.');
+    assert(out.skipped.length === COMMANDS.length - allowed.length && out.skipped.every(row => scope[row.name] === 'destructive'), `Skipped ${JSON.stringify(out.skipped)}.`);
+    const status = tools.find(tool => tool.name === 'player.status');
+    const reply = await status.execute({});
+    const parsed = JSON.parse(reply.content[0].text);
+    assert(!reply.isError && 'playing' in parsed, `player.status tool replied ${JSON.stringify(reply).slice(0, 200)}.`);
+    out.unregister();
+  });
+
+  // ---- Rivulina hand-off ----------------------------------------------------
+  await check('Hand-off: a file NakliOS sends joins the queue as transient and plays', async () => {
+    const released = [];
+    const reads = [];
+    const handler = event => {
+      if (event.source !== app) return;
+      const msg = event.data;
+      if (msg?.type === 'naklios:file:read') {
+        reads.push(msg.token);
+        app.postMessage({ type: 'naklios:file:reply', requestId: msg.requestId, result: { bytes: new Uint8Array(mp3), name: 'Handoff Song.mp3', type: 'audio/mpeg' } }, '*');
+      }
+      if (msg?.type === 'naklios:file:release') released.push(msg.token);
+    };
+    window.addEventListener('message', handler);
+    try {
+      harness.pause();
+      const before = harness.queueSnapshot().length;
+      app.postMessage({ type: 'naklios:file:grant', grant: { token: 'harness-tok-1', name: 'Handoff Song.mp3', type: 'audio/mpeg', sourceAppId: 'rivulina' } }, '*');
+      await waitFor(() => String(harness.playingId()).startsWith('transient:') && state().clock.playing,
+        () => `Playing ${harness.playingId()}, playing ${state().clock.playing}, reads ${reads.length}.`, 20_000);
+      assert(reads.length === 1 && reads[0] === 'harness-tok-1', `Reads: ${JSON.stringify(reads)}.`);
+      const snap = harness.queueSnapshot();
+      assert(snap.length === before + 1 && snap.ids[snap.index] === harness.playingId(), `Queue ${JSON.stringify(snap.ids)} index ${snap.index}.`);
+      assert(/Handoff Song/.test((await harness.run('player.status')).track?.title ?? ''), 'The status does not name the sent file.');
+      await waitFor(() => released.includes('harness-tok-1'), 'The grant was not released.');
+      const stored = app.localStorage.getItem('nakliamp:queue') ?? '';
+      assert(!stored.includes('transient:'), 'The stored queue holds the transient id.');
+      harness.pause();
+    } finally {
+      window.removeEventListener('message', handler);
+    }
+  });
+
+  // ---- V5 skin face ---------------------------------------------------------
+  const skinParts = [
+    ['MAIN.BMP', bmp(275, 116, [40, 60, 90])],
+    ['TITLEBAR.BMP', bmp(344, 87, [90, 40, 60])],
+    ['PLEDIT.BMP', bmp(280, 186, [60, 90, 40])],
+  ];
+  const pickSkin = async (panel, blob, name) => {
+    const picker = panel.querySelector('input[type=file]');
+    const transfer = new app.DataTransfer();
+    transfer.items.add(new app.File([blob], name, { type: 'application/zip' }));
+    picker.files = transfer.files;
+    picker.dispatchEvent(new app.Event('change', { bubbles: true }));
+  };
+
+  await check('V5: a skin without PLEDIT.BMP is refused by name', async () => {
+    await harness.run('view.skins');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-skinface'), 'The skin dialog did not open.');
+    await pickSkin(panel, zip(skinParts.slice(0, 2)), 'Partial.wsz');
+    await waitFor(() => /PLEDIT\.BMP/.test(panel.querySelector('[role=status]').textContent),
+      () => `Status: "${panel.querySelector('[role=status]').textContent}".`);
+    assert(!$('#webamp'), 'Webamp mounted for an incomplete skin.');
+  });
+
+  await check('V5: a complete skin mounts and its play button runs player.play', async () => {
+    await loadQueue(['Long Tone']);
+    harness.pause();
+    await harness.run('view.skins');
+    const panel = await waitFor(() => dialogRoot()?.querySelector('.nk-skinface'), 'The skin dialog did not open.');
+    await pickSkin(panel, zip(skinParts), 'Harness.wsz');
+    await waitFor(() => /Skin: Harness\.wsz/.test(panel.querySelector('[role=status]').textContent),
+      () => `Status: "${panel.querySelector('[role=status]').textContent}".`, 30_000);
+    const play = await waitFor(() => $('#webamp #play'), 'Webamp has no play button.');
+    assert(!state().clock.playing, 'Playback was already running.');
+    play.dispatchEvent(new app.MouseEvent('mousedown', { bubbles: true }));
+    play.dispatchEvent(new app.MouseEvent('mouseup', { bubbles: true }));
+    play.click();
+    await waitFor(() => state().clock.playing, 'Webamp play did not start NakliAmp playback.', 10_000);
+    harness.pause();
+    await closeDialogs();
+    await waitFor(() => !$('#webamp'), 'Webamp stayed mounted after the dialog closed.');
+  });
+
+  // ---- 15 new visualiser modes ----------------------------------------------
+  await check('Visualiser: the 15 cliamp modes each draw', async () => {
+    await loadQueue(['Long Tone']);
+    await harness.play();
+    const canvas = $('#vis');
+    const paint = canvas.getContext('2d');
+    const flat = [];
+    for (const id of ['rain', 'retro', 'binary', 'sakura', 'firework', 'bubbles', 'logo', 'terrain', 'heartbeat', 'butterfly', 'ascii', 'firefly', 'mosaic', 'sand', 'geyser']) {
+      const applied = harness.setVisualiserMode(id);
+      assert(applied === id, `Mode ${id} applied as ${applied}.`);
+      await sleep(1200);
+      const vis = harness.visualiser();
+      assert(vis.mode === id && vis.running, `Mode ${id}: ${JSON.stringify(vis)}.`);
+      const { data } = paint.getImageData(0, 0, canvas.width, canvas.height);
+      let varied = false;
+      for (let i = 4; i < data.length && !varied; i += 4) {
+        if (data[i] !== data[0] || data[i + 1] !== data[1] || data[i + 2] !== data[2]) varied = true;
+      }
+      if (!varied) flat.push(id);
+    }
+    harness.pause();
+    harness.setVisualiserMode('bars');
+    assert(!flat.length, `These modes left the canvas one colour: ${flat.join(', ')}.`);
+  });
+
+  app.HTMLAnchorElement.prototype.click = anchorClick;
+  notes.downloadsCaptured = downloads.map(entry => entry.name);
+  try { harness.pause(); } catch { /* page gone */ }
+  const remote = [...remoteEntries(app), ...remoteEntries(window)];
+  if (remote.length) failed.push(`remote requests: ${remote.join(', ')}`);
+  return { errors: [...(app.__errs ?? []), ...(window.__errs ?? [])] };
+}
+
+run().then(({ errors }) => {
+  const ok = !failed.length && !errors.length;
+  result.dataset.status = ok ? 'pass' : 'fail';
+  result.textContent = JSON.stringify({ checks: passed.length + failed.length, passed: passed.length, failed, errors, notes }, null, 2);
+  document.title = `${ok ? 'PASS' : 'FAIL'} — NakliAmp v1.x feature gate`;
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = JSON.stringify({ aborted: error.stack || String(error), passed: passed.length, failed, notes }, null, 2);
+  document.title = 'FAIL — NakliAmp v1.x feature gate';
+});
+</script>
+</body>
+</html>

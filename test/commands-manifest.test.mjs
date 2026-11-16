@@ -44,8 +44,9 @@ test('every command has a label, description, group, scope and object input sche
   }
 });
 
-test('only tag writing and playlist deletion are destructive', () => {
-  assert.deepEqual(COMMANDS.filter(c => c.scope === 'destructive').map(c => c.name).sort(), ['playlist.delete', 'track.edit_tags']);
+test('only file-changing and index-forgetting commands are destructive', () => {
+  assert.deepEqual(COMMANDS.filter(c => c.scope === 'destructive').map(c => c.name).sort(),
+    ['library.forget_folder', 'playlist.delete', 'tags.find_replace', 'tags.rename_files', 'track.edit_tags']);
   for (const name of ['player.status', 'queue.read', 'library.search', 'library.browse', 'track.read', 'playlist.list', 'smart.list']) {
     assert.equal(commandByName.get(name).scope, 'read', name);
   }

@@ -12,7 +12,7 @@
 
 import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
 import { decodePcm, sniffPcm } from '../app/decode/pcm.mjs';
-import { libavDecoder } from '../app/decode/libav.mjs';
+import { libavDecoder, decodeLibav, libavInstance } from '../app/decode/libav.mjs';
 
 const PCM = { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm };
 const result = document.querySelector('#result');
@@ -65,6 +65,92 @@ async function checkLeanBuild(name) {
   return refusal.code;
 }
 
+// Two decodes of the same container at once must not share a scratch file.
+//
+// MEMFS is one flat namespace and the name was fixed per container, so a
+// second decode overwrote the first one's bytes mid-demux. The engine's
+// supersede logic does not help: it cancels the caller, not the decode
+// already running inside wasm.
+async function checkConcurrentDecodes(report) {
+  const good = new Uint8Array(await (await fixture('audio-wmav2.wma')).arrayBuffer());
+  // Same signature, no usable stream: it fails, and it fails *while* the
+  // valid one is being read.
+  const broken = new Uint8Array(4096);
+  broken.set(good.subarray(0, 64));
+
+  const [first, second] = await Promise.allSettled([
+    libavDecoder.decode(good),
+    libavDecoder.decode(broken),
+  ]);
+  assert(first.status === 'fulfilled',
+    `A concurrent decode of the same container broke the valid one: ${first.reason?.message}`);
+  assert(first.value.frames > 1000, `The valid concurrent decode returned ${first.value?.frames} frames.`);
+  assert(second.status === 'rejected', 'A file with no readable stream decoded.');
+  assert(second.reason?.name === 'LibavDecodeError', `Unnamed concurrent failure: ${second.reason?.name}`);
+  report.concurrentFrames = first.value.frames;
+}
+
+// A second stream must not end the read early.
+//
+// The read loop once stopped at the first batch with no packets for the
+// audio stream. With cover art that is the very first batch, so the track
+// came back empty or cut short. A one-byte batch budget puts the cover-art
+// packet alone in the first batch, which is that case exactly.
+async function checkSecondStream(report) {
+  const plain = await decodeLibav(new Uint8Array(await (await fixture('audio-alac.m4a')).arrayBuffer()));
+  const cover = new Uint8Array(await (await fixture('audio-alac-cover.m4a')).arrayBuffer());
+  for (const readLimit of [1, 4096]) {
+    const decoded = await decodeLibav(cover, { readLimit });
+    assert(decoded.frames === plain.frames,
+      `The cover-art ALAC decoded ${decoded.frames} frames at a ${readLimit}-byte batch; the plain one ${plain.frames}.`);
+  }
+  report.secondStreamFrames = plain.frames;
+}
+
+// Repeated failures must not leak wasm handles.
+//
+// The decoder context, packet, frame and demuxer were freed only on the
+// success path, so every refused file left four handles inside the wasm heap
+// for the life of the tab. The heap's allocated byte count must return to
+// its baseline after a run of refused and successful decodes, and the tier
+// must still work afterwards.
+async function checkHeapAfterFailures(report) {
+  const instance = await libavInstance();
+  const broken = new Uint8Array(4096);
+  broken.set([0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11]);
+  const wma = new Uint8Array(await (await fixture('audio-wmav2.wma')).arrayBuffer());
+  try { await libavDecoder.decode(broken); } catch { /* warm the failure path */ }
+  await libavDecoder.decode(wma);
+  const baseline = await instance.mallinfo_uordblks();
+  let refusals = 0;
+  for (let round = 0; round < 25; round += 1) {
+    try { await libavDecoder.decode(broken); } catch { refusals += 1; }
+  }
+  assert(refusals === 25, `${25 - refusals} malformed files decoded without error.`);
+  const after = await libavDecoder.decode(wma);
+  assert(after.frames > 1000, `The tier decoded ${after.frames} frames after 25 failures.`);
+  const heldAfter = await instance.mallinfo_uordblks();
+  assert(heldAfter === baseline, `The wasm heap holds ${heldAfter - baseline} bytes more after 26 decodes.`);
+  report.afterFailures = after.frames;
+  report.heapDeltaBytes = heldAfter - baseline;
+}
+
+// A file too large to hold several times over is refused by name.
+//
+// The size is checked before anything is read or allocated, so the guard is
+// exercised with a stand-in that reports a length rather than a quarter of a
+// gigabyte of real memory the gate would then have to hold.
+async function checkTooLarge(report) {
+  const enormous = { length: 300 * 1024 * 1024 };
+  for (const [index, byte] of [0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11].entries()) enormous[index] = byte;
+  let refusal = null;
+  try { await libavDecoder.decode(enormous); } catch (error) { refusal = error; }
+  assert(refusal, 'A 300 MB file was accepted for whole-file decode.');
+  assert(refusal.code === 'ERR_NAKLIAMP_LIBAV_TOO_LARGE', `Unexpected refusal ${refusal.code}.`);
+  assert(refusal.message.includes('300'), `The refusal did not say how large: ${refusal.message}`);
+  report.tooLarge = refusal.code;
+}
+
 async function run() {
   const report = {};
 
@@ -82,66 +168,13 @@ async function run() {
   // The lean build refuses both, by name, and does not retry them.
   for (const [name] of CASES) report[`lean:${name}`] = await checkLeanBuild(name);
 
-  // Two decodes of the same container at once must not share a scratch file.
-  //
-  // MEMFS is one flat namespace and the name was fixed per container, so a
-  // second decode overwrote the first one's bytes mid-demux. The engine's
-  // supersede logic does not help: it cancels the caller, not the decode
-  // already running inside wasm.
-  {
-    const good = new Uint8Array(await (await fixture('audio-wmav2.wma')).arrayBuffer());
-    // Same signature, no usable stream: it fails, and it fails *while* the
-    // valid one is being read.
-    const broken = new Uint8Array(4096);
-    broken.set(good.subarray(0, 64));
+  await checkConcurrentDecodes(report);
 
-    const [first, second] = await Promise.allSettled([
-      libavDecoder.decode(good),
-      libavDecoder.decode(broken),
-    ]);
-    assert(first.status === 'fulfilled',
-      `A concurrent decode of the same container broke the valid one: ${first.reason?.message}`);
-    assert(first.value.frames > 1000, `The valid concurrent decode returned ${first.value?.frames} frames.`);
-    assert(second.status === 'rejected', 'A file with no readable stream decoded.');
-    assert(second.reason?.name === 'LibavDecodeError', `Unnamed concurrent failure: ${second.reason?.name}`);
-    report.concurrentFrames = first.value.frames;
-  }
+  await checkSecondStream(report);
 
-  // Repeated failures must not exhaust the module.
-  //
-  // The decoder context, packet, frame and demuxer were freed only on the
-  // success path, so every refused file left four handles inside the wasm heap
-  // for the life of the tab. This is a soak rather than a direct count: the
-  // handles are not observable from outside, so what is asserted is that the
-  // tier still works after a run of failures.
-  {
-    const broken = new Uint8Array(4096);
-    broken.set([0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11]);
-    let refusals = 0;
-    for (let round = 0; round < 25; round += 1) {
-      try { await libavDecoder.decode(broken); } catch { refusals += 1; }
-    }
-    assert(refusals === 25, `${25 - refusals} malformed files decoded without error.`);
-    const after = await libavDecoder.decode(new Uint8Array(await (await fixture('audio-wmav2.wma')).arrayBuffer()));
-    assert(after.frames > 1000, `The tier decoded ${after.frames} frames after 25 failures.`);
-    report.afterFailures = after.frames;
-  }
+  await checkHeapAfterFailures(report);
 
-  // A file too large to hold several times over is refused by name.
-  //
-  // The size is checked before anything is read or allocated, so the guard is
-  // exercised with a stand-in that reports a length rather than a quarter of a
-  // gigabyte of real memory the gate would then have to hold.
-  {
-    const enormous = { length: 300 * 1024 * 1024 };
-    for (const [index, byte] of [0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11].entries()) enormous[index] = byte;
-    let refusal = null;
-    try { await libavDecoder.decode(enormous); } catch (error) { refusal = error; }
-    assert(refusal, 'A 300 MB file was accepted for whole-file decode.');
-    assert(refusal.code === 'ERR_NAKLIAMP_LIBAV_TOO_LARGE', `Unexpected refusal ${refusal.code}.`);
-    assert(refusal.message.includes('300'), `The refusal did not say how large: ${refusal.message}`);
-    report.tooLarge = refusal.code;
-  }
+  await checkTooLarge(report);
 
   return report;
 }

@@ -77,8 +77,20 @@ try {
 
 const pagePolicy = index.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
 assert(pagePolicy, 'The in-document Content-Security-Policy is missing.');
-assert(/connect-src 'self'/.test(pagePolicy), 'The page CSP permits an unexpected network destination.');
-assert(!/connect-src[^;]*https?:/.test(pagePolicy), 'The page CSP permits a remote HTTP connection.');
+// connect-src is exactly 'self', blob: (same-origin object URLs: the classic skin face
+// and the wasm glue) and the opt-in services (T8, T9, I1). Each service is off until the
+// person turns it on (app/net/consent.mjs); verify-boundary.mjs proves the default makes
+// no request. Any other source, or a missing one, fails here.
+const CONNECT_ALLOWLIST = [
+  "'self'", 'blob:',
+  'https://musicbrainz.org', 'https://coverartarchive.org', 'https://archive.org', 'https://*.archive.org',
+  'https://lrclib.net', 'https://api.listenbrainz.org',
+];
+const connectSources = (pagePolicy.match(/(?:^|;)\s*connect-src([^;]*)/)?.[1] ?? '').trim().split(/\s+/).filter(Boolean);
+assert(
+  connectSources.length === CONNECT_ALLOWLIST.length && CONNECT_ALLOWLIST.every(source => connectSources.includes(source)),
+  `The page CSP connect-src is ${connectSources.join(' ')}; it must be exactly ${CONNECT_ALLOWLIST.join(' ')}.`,
+);
 // Derived, not hardcoded. A literal version here has gone stale at every bump
 // and failed a correct build for naming the wrong number.
 const declaredVersion = /<meta name="nakliamp-version" content="([^"]+)">/.exec(index)?.[1];
@@ -98,5 +110,5 @@ assert(
 );
 console.log(
   `PASS — Delivery policy: ${modules.length} modules reachable, all present; `
-  + 'strict CSP; source notice; Chromium-only gate',
+  + 'strict CSP (connect-src = self, blob: and the opt-in allowlist); source notice; Chromium-only gate',
 );

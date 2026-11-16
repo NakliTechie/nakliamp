@@ -10,6 +10,7 @@
 <pre id="result" data-status="running">running</pre>
 <iframe id="app" title="NakliAmp test app"></iframe>
 <script type="module">
+import { positionToDb, dbToPosition, positionToGain, stepDb, DEFAULT_FLOOR_DB } from '../app/audio/volume.mjs';
 const result = document.querySelector('#result');
 const frame = document.querySelector('#app');
 
@@ -63,22 +64,30 @@ async function run() {
     volume.dispatchEvent(new app.Event('input', { bubbles: true }));
   };
   const volumeKey = key => doc.body.dispatchEvent(new app.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  // S5: the slider is a position mapped linearly to dB above the floor (default -50 dB);
+  // the engine gets the linear gain, and the arrow keys step 2 dB.
+  const close = (a, b) => Math.abs(a - b) < 1e-9;
   const assertVolume = expected => {
-    assert(Number(volume.value) === expected, `Slider volume differs from ${expected}.`);
-    assert(harness.state().clock.volume === expected, `Engine volume differs from ${expected}.`);
-    assert(Number(app.localStorage.getItem('nakliamp:volume')) === expected, `Saved volume differs from ${expected}.`);
+    assert(close(Number(volume.value), expected), `Slider position ${volume.value} differs from ${expected}.`);
+    const gain = positionToGain(expected, DEFAULT_FLOOR_DB);
+    assert(Math.abs(harness.state().clock.volume - gain) < 1e-6, `Engine gain ${harness.state().clock.volume} differs from ${gain}.`);
+    assert(close(Number(app.localStorage.getItem('nakliamp:volume')), expected), `Saved position differs from ${expected}.`);
   };
+  const stepped = (position, db) => dbToPosition(stepDb(positionToDb(position, DEFAULT_FLOOR_DB), db, DEFAULT_FLOOR_DB), DEFAULT_FLOOR_DB);
   for (const initial of [0.30, 0.31, 0.37]) {
     setVolume(initial);
     for (let pair = 0; pair < 3; pair++) {
       volumeKey('ArrowUp');
-      assertVolume(Math.round((initial + 0.05) * 100) / 100);
+      assertVolume(stepped(initial, 2));
       volumeKey('ArrowDown');
-      assertVolume(initial);
+      assertVolume(stepped(stepped(initial, 2), -2));
+      assert(Math.abs(Number(volume.value) - initial) < 1e-3, `Up then down drifted from ${initial} to ${volume.value}.`);
+      setVolume(initial);
     }
   }
   setVolume(0.98); volumeKey('ArrowUp'); assertVolume(1);
   setVolume(0.02); volumeKey('ArrowDown'); assertVolume(0);
+  assert(doc.querySelector('#volume-db').textContent === 'Muted', 'The dB label does not say Muted at the bottom.');
   setVolume(0.8);
 
   let refusal = null;

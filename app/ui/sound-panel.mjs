@@ -182,10 +182,24 @@ export function mountSoundPanel(root, ctx) {
     'aria-label': 'Reset the equaliser to flat', onclick: () => act('eq.preset', { preset: 'flat' }, { eq: { preset: 'flat' } }),
   });
 
+  // Winamp .eqf import and export (S7), through eq.import_eqf and eq.export_eqf.
+  const eqfInput = h('input', { type: 'file', accept: '.eqf,.q1', hidden: true, 'aria-label': 'Winamp EQ file' });
+  eqfInput.addEventListener('change', async () => {
+    const file = eqfInput.files?.[0];
+    eqfInput.value = '';
+    if (!file || typeof ctx.run !== 'function') return;
+    try { await ctx.run('eq.import_eqf', {}, { context: { file } }); } catch (error) { ctx.toast?.(String(error?.message ?? error).replace(/^\[[a-z-]+\] /, '')); }
+  });
+  const eqfImport = h('button', { type: 'button', className: 'nk-btn', textContent: 'Import .eqf', 'aria-label': 'Import a Winamp EQ preset file', onclick: () => eqfInput.click() });
+  const eqfExport = h('button', {
+    type: 'button', className: 'nk-btn', textContent: 'Export .eqf', 'aria-label': 'Save the current curve as a Winamp EQ file',
+    onclick: () => ctx.run?.('eq.export_eqf', {}).catch(error => ctx.toast?.(String(error?.message ?? error))),
+  });
+
   const eqSection = h('section', { 'aria-labelledby': `${id}-eq-h` },
     h('h3', { id: `${id}-eq-h` }, 'Equaliser',
       h('label', { className: 'switch', htmlFor: `${id}-eq-on` }, eqOn, 'On')),
-    h('div', { className: 'row' }, h('label', { htmlFor: `${id}-preset`, textContent: 'Preset' }), presetSelect, resetButton),
+    h('div', { className: 'row' }, h('label', { htmlFor: `${id}-preset`, textContent: 'Preset' }), presetSelect, resetButton, eqfImport, eqfExport, eqfInput),
     eqGrid,
     h('p', { className: 'hint', textContent: 'Bands in hertz (k = kHz), gains in dB. Moving a band saves your curve as Custom. Arrow keys move a band by 0.5 dB; Page Up and Page Down move it further.' }));
 

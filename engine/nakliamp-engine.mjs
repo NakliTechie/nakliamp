@@ -2,6 +2,7 @@ import { createReelEngine } from './reel-engine.mjs';
 import { createChain, resolveTrackGain } from '../app/audio/chain.mjs';
 import { createGaplessLane, laneItem, laneJoin, wantsLane, LANE_MAX_S } from '../app/audio/gapless.mjs';
 import { parseTrim, reconcileTrim } from '../app/audio/trim.mjs';
+import { createMonoStage } from '../app/audio/volume.mjs';
 
 export class NakliAmpError extends Error {
   constructor(name, code, message, cause = null) {
@@ -264,7 +265,15 @@ function mergeDspPatch(dsp, patch) {
   if (patch.replayGain && typeof patch.replayGain === 'object') dsp.replayGain = { ...dsp.replayGain, ...patch.replayGain };
   if (patch.crossfadeS !== undefined) dsp.crossfadeS = Math.max(0, Math.min(12, Number(patch.crossfadeS) || 0));
   if (patch.gapless !== undefined && ['off', 'albums', 'always'].includes(patch.gapless)) dsp.gapless = patch.gapless;
+  if (patch.mono !== undefined) dsp.mono = Boolean(patch.mono);
   dsp.chain = patch.chain === undefined ? true : Boolean(patch.chain);
+}
+
+/** A playback rate in 0.5..2 (P9); junk is 1. */
+function clampRate(value) {
+  const rate = Number(value);
+  if (!Number.isFinite(rate) || rate <= 0) return 1;
+  return Math.max(0.5, Math.min(2, rate));
 }
 
 /** The refusal for a codec the browser's native audio path cannot play. */
@@ -356,7 +365,12 @@ export function createNakliAmpEngine({
     replayGain: { mode: 'off', preampDb: 0, preventClipping: true },
     crossfadeS: 0,
     gapless: 'off',
+    mono: false,
   };
+  // Speed (P9) and output device (S6) hold across tracks and routes.
+  let speed = 1;
+  let sinkId = '';
+  let sinkError = null;
   const chains = new Map(); // AudioContext -> chain
   let r1Spliced = null; // the Reel gain node currently routed into the chain
   let currentMeta = null; // { albumKey, trackNo, discNo, replayGain, loudness } of the loaded track
@@ -464,7 +478,7 @@ export function createNakliAmpEngine({
     const graph = rawRungGraph();
     if (!graph) return null;
     const chain = routeChained() ? chains.get(graph.context) : null;
-    return chain ? { context: graph.context, output: chain.output } : graph;
+    return chain ? { context: graph.context, output: chainTap(chain) } : graph;
   }
 
   function rawRungGraph() {
@@ -554,15 +568,45 @@ export function createNakliAmpEngine({
       chain = createChain(context);
       chain.setEq(dsp.eq);
       chain.setGainDb(lane && context === lane.context ? 0 : trackGain.gainDb);
+      attachMono(context, chain);
       chains.set(context, chain);
+      applySink(context);
     }
     return chain;
   }
 
+  /**
+   * The mono stage (P11) sits after the chain: chain.output -> stage -> destination.
+   * A context that cannot build it (no channel merger) keeps the plain route,
+   * and the state reports mono as unavailable rather than pretending.
+   */
+  function attachMono(context, chain) {
+    let stage;
+    try {
+      stage = createMonoStage(context, { mono: dsp.mono });
+    } catch {
+      return;
+    }
+    try {
+      chain.output.disconnect(context.destination);
+      chain.output.connect(stage.input);
+      stage.output.connect(context.destination);
+      chain.post = stage;
+    } catch {
+      try { chain.output.connect(context.destination); } catch {}
+    }
+  }
+
+  /** The node the analysers tap on a chained route: after the mono stage, so the picture matches what plays. */
+  const chainTap = chain => chain.post?.output ?? chain.output;
+
   function dropChain(context) {
     const chain = context ? chains.get(context) : null;
     if (!chain) return;
-    if (analyserOwner === chain.output) disposeAnalyser();
+    if (analyserOwner === chainTap(chain)) disposeAnalyser();
+    if (chain.post) {
+      for (const node of [chain.post.input, chain.post.output, ...Object.values(chain.post.nodes ?? {})]) { try { node.disconnect(); } catch {} }
+    }
     chain.dispose();
     chains.delete(context);
   }
@@ -685,6 +729,7 @@ export function createNakliAmpEngine({
     const volume = context.createGain();
     volume.gain.value = laneMutedFlag ? 0 : laneVolumeValue;
     const instance = createGaplessLane({ context, destination: volume, onAdvance: laneAdvanced });
+    instance.setRate?.(speed);
     lane = { context, volume, lane: instance, chained: false };
     lane.chained = connectOutput(context, volume);
     if (lane.chained) chains.get(context)?.setGainDb(0);
@@ -903,10 +948,85 @@ export function createNakliAmpEngine({
     const wasChained = dsp.chain;
     mergeDspPatch(dsp, patch);
     if (wasChained !== dsp.chain) reroute();
-    for (const chain of chains.values()) chain.setEq(dsp.eq);
+    for (const chain of chains.values()) { chain.setEq(dsp.eq); chain.post?.setMono(dsp.mono); }
     applyTrackGain();
     refreshPending();
     return dspState();
+  }
+
+  // ---- Speed (P9) and output device (S6) -----------------------------------
+
+  /** Apply the current speed to whichever route is live. */
+  function applyRate() {
+    if (mode === 'r1') { try { reel.setRate?.(speed); } catch {} }
+    if (nativeAudio) applyNativeRate();
+    if (software) applySoftwareRate();
+    lane?.lane.setRate?.(speed);
+  }
+
+  function applyNativeRate() {
+    try { nativeAudio.preservesPitch = true; } catch {}
+    try { nativeAudio.playbackRate = speed; } catch {}
+  }
+
+  /** Keep the R3 clock continuous: fold the elapsed time in at the old rate first. */
+  function applySoftwareRate() {
+    if (software.playing) {
+      software.offsetS = softwarePosition();
+      software.startedAt = software.context.currentTime;
+    }
+    software.rate = speed;
+    if (software.source?.playbackRate) software.source.playbackRate.value = speed;
+  }
+
+  /**
+   * Set the playback rate, 0.5..2, on every route. The element keeps pitch
+   * (preservesPitch); the buffer routes (R1, R3, the lane) change pitch with
+   * speed, and the state says which.
+   */
+  function setRate(value) {
+    speed = clampRate(value);
+    applyRate();
+    return { rate: speed, preservesPitch: mode === 'r2' };
+  }
+
+  /** Route one context to the chosen output device, where the browser can. */
+  function applySink(context) {
+    if (!context || typeof context.setSinkId !== 'function') return Promise.resolve(false);
+    if ((context.sinkId ?? '') === sinkId) return Promise.resolve(true);
+    return Promise.resolve()
+      .then(() => context.setSinkId(sinkId))
+      .then(() => { sinkError = null; return true; })
+      .catch(error => { sinkError = { name: error?.name || 'Error', message: error?.message || String(error) }; return false; });
+  }
+
+  /**
+   * Play through another output device (`''` is the system default). Every live
+   * context and the native element move; contexts built later pick it up in
+   * chainFor. Resolves `{ applied, supported, error }`.
+   */
+  async function setSinkId(id) {
+    sinkId = typeof id === 'string' ? id : '';
+    sinkError = null;
+    const contexts = [...new Set([...chains.keys(), currentContext()].filter(Boolean))]
+      .filter(context => typeof context.setSinkId === 'function');
+    const results = await Promise.all(contexts.map(applySink));
+    const element = await applyElementSink();
+    const supported = contexts.length > 0 || element !== null;
+    const applied = results.every(Boolean) && element !== false;
+    return { applied: applied && !sinkError, supported, error: sinkError };
+  }
+
+  /** The unchained native element plays straight to an output: true, false, or null when not in use. */
+  async function applyElementSink() {
+    if (!nativeAudio || nativeGraph || typeof nativeAudio.setSinkId !== 'function') return null;
+    try {
+      await nativeAudio.setSinkId(sinkId);
+      return true;
+    } catch (error) {
+      sinkError = { name: error?.name || 'Error', message: error?.message || String(error) };
+      return false;
+    }
   }
 
   /** Reschedule a decoded next item, or retry a preload the old settings would not join. */
@@ -937,6 +1057,14 @@ export function createNakliAmpEngine({
     };
   }
 
+  /** 'on', 'off', or 'unavailable' when the live chain has no mono stage. */
+  function monoState() {
+    const context = currentContext();
+    const chain = context ? chains.get(context) : null;
+    if (!dsp.mono) return 'off';
+    return chain?.post ? 'on' : 'unavailable';
+  }
+
   function dspState() {
     const { scheduled, ...laneState } = laneDspState();
     return {
@@ -948,6 +1076,10 @@ export function createNakliAmpEngine({
       gainSource: trackGain.source,
       clipLimited: trackGain.clipLimited,
       eq: { enabled: Boolean(dsp.eq.enabled), preset: dsp.eq.preset },
+      mono: monoState(),
+      rate: speed,
+      sinkId,
+      sinkError,
       next: scheduled ? scheduled.mode : (pendingNext?.state ?? 'none'),
       trim: laneState.trim,
       laneSkipped,
@@ -1017,6 +1149,7 @@ export function createNakliAmpEngine({
       decoderName: decoded.decoderName,
       offsetS: 0,
       startedAt: 0,
+      rate: speed,
       playing: false,
       volume: 1,
       muted: false,
@@ -1028,7 +1161,7 @@ export function createNakliAmpEngine({
 
   function softwarePosition() {
     if (!software) return 0;
-    const elapsed = software.playing ? software.context.currentTime - software.startedAt : 0;
+    const elapsed = software.playing ? (software.context.currentTime - software.startedAt) * (software.rate || 1) : 0;
     return Math.min(software.durationS, software.offsetS + elapsed);
   }
 
@@ -1108,6 +1241,7 @@ export function createNakliAmpEngine({
     stopLane();
     r1Spliced = null;
     mode = 'r1';
+    applyRate();
     status = 'ready';
     nativeMetadata = null;
     nativeFingerprint = null;
@@ -1204,6 +1338,7 @@ export function createNakliAmpEngine({
     mode = 'r2';
     status = 'ready';
     lastError = null;
+    applyRate();
   }
 
   /**
@@ -1429,6 +1564,7 @@ export function createNakliAmpEngine({
       stopSoftwareSource();
       const source = software.context.createBufferSource();
       source.buffer = software.buffer;
+      if (source.playbackRate) source.playbackRate.value = software.rate || 1;
       source.connect(software.gain);
       source.onended = () => { if (software?.playing) software.playing = false; };
       source.start(0, Math.min(software.offsetS, software.durationS));
@@ -1545,7 +1681,7 @@ export function createNakliAmpEngine({
       clock: {
         positionS,
         playing: lane.lane.playing(),
-        rate: 1,
+        rate: speed,
         volume: laneVolumeValue,
         muted: laneMutedFlag,
       },
@@ -1615,7 +1751,7 @@ export function createNakliAmpEngine({
       clock: {
         positionS: softwarePosition(),
         playing: software.playing,
-        rate: 1,
+        rate: software.rate || 1,
         volume: software.volume,
         muted: software.muted,
       },
@@ -1729,6 +1865,8 @@ export function createNakliAmpEngine({
     analysers: audioChannelAnalysers,
     setDsp,
     setTrackGain,
+    setRate,
+    setSinkId,
     preload,
     on: events.on,
     eventHistory: events.history,

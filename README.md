@@ -204,5 +204,12 @@ folder, ratings and favourites, smart playlists, tag editing written back to
 the file (Chromium), lyrics (embedded and `.lrc`), folder art, a Milkdrop
 visualiser, light and dark themes, a mini player, a keyboard-map overlay (`?`),
 AI playlists from a description through the NakliOS model, and a command list
-(`commands.json`) that NakliOS and agents can call. The full matrix and how each
-row was checked: `docs/specs/nakliamp-parity-001.md`.
+(`commands.json`) that NakliOS and agents can call.
+
+Since v1.x (2026-11-17): cue sheets, several music folders, duplicates, rename and
+find-and-replace in tags, playback speed, sleep timer, mono, volume in dB, output
+device choice, Winamp `.eqf` presets, ALAC, classic `.wsz` skins through Webamp,
+31 visualiser modes, "More like this", genre fill, a command bar, WebMCP, and three
+opt-in services that are off until you turn each one on: MusicBrainz tags and
+covers, LRCLIB lyrics and ListenBrainz scrobbling. The full matrix and how each row
+was checked: `docs/specs/nakliamp-parity-001.md`.

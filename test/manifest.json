@@ -113,6 +113,14 @@
       "bytes": 34838,
       "sha256": "b5273852d95c3ce96021b1062cca0f8c3d104534810905d2d242270999d86f1b",
       "role": "audio-wasm"
+    },
+    {
+      "file": "audio-alac-cover.m4a",
+      "bytes": 34965,
+      "sha256": "f1a72be3cfb4c41b56c730cb7dc78f7c287aef95792ae52c4a8f65700dc6273b",
+      "role": "audio-wasm-second-stream",
+      "derivedFrom": "audio-alac.m4a",
+      "note": "audio-alac.m4a remuxed with ffmpeg -c copy plus a 16x16 PNG as an attached_pic stream, so the demuxer reports a second stream"
     }
   ]
 }

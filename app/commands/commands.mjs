@@ -34,7 +34,9 @@ export const REPEAT_MODES = ['off', 'all', 'one'];
 export const BROWSE_BY = ['albums', 'artists', 'albumArtists', 'genres', 'years', 'folders',
   'recentlyAdded', 'recentlyPlayed', 'mostPlayed', 'favourites', 'rated'];
 export const VIEWS = ['library', 'albums', 'artists', 'albumArtists', 'genres', 'years', 'folders',
-  'queue', 'playlists', 'search', 'lyrics', 'inspector', 'eq', 'settings', 'ai'];
+  'queue', 'playlists', 'search', 'lyrics', 'inspector', 'eq', 'settings', 'ai',
+  // v1.x dialogs
+  'network', 'music-folders', 'duplicates', 'rename', 'sleep', 'commands', 'similar', 'genre-fill', 'skins'];
 export const EQ_PRESETS = ['flat', 'rock', 'pop', 'jazz', 'classical', 'bass-boost', 'treble-boost',
   'vocal', 'electronic', 'acoustic', 'custom'];
 export const SMART_FIELDS = ['genre', 'artist', 'albumArtist', 'album', 'title', 'year', 'rating', 'playCount',
@@ -45,6 +47,11 @@ export const SORT_KEYS = ['title', 'artist', 'album', 'year', 'addedAt', 'playCo
 /** File types NakliOS offers to open in NakliAmp. */
 export const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.oga', '.wav', '.mka', '.webm',
   '.aiff', '.aif', '.aifc', '.caf', '.au', '.wma', '.ape', '.wv', '.mpc', '.tta', '.dsf', '.dff'];
+
+/** Origins the network commands may name (app/net/consent.mjs KNOWN_ORIGINS). */
+export const NETWORK_ORIGINS = ['https://musicbrainz.org', 'https://coverartarchive.org', 'https://lrclib.net', 'https://api.listenbrainz.org'];
+const RENAME_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre'];
+const mbid = description => str(description, { minLength: 36, maxLength: 36 });
 
 const digitSeeks = Array.from({ length: 10 }, (_, n) => ({ key: String(n), input: { percent: n * 10 }, label: `Jump to ${n * 10}%` }));
 const ratingKeys = Array.from({ length: 6 }, (_, n) => ({ key: `Alt+${n}`, input: { rating: n }, label: n ? `Rate ${n} star${n > 1 ? 's' : ''}` : 'Clear rating' }));
@@ -145,6 +152,7 @@ const RAW = [
         discNo: int('Disc number', { minimum: 0 }), discTotal: int('Disc total', { minimum: 0 }),
         year: int('Year', { minimum: 0, maximum: 9999 }), genre: str('Genre'), rating: int('Stars', { minimum: 0, maximum: 5 }),
       }),
+      coverFrom: mbid('A MusicBrainz release id: its Cover Art Archive front cover is written as the cover art (needs the Cover Art Archive turned on)'),
     }, ['ids', 'patch']) },
 
   // ------------------------------------------------------------- playlists ----
@@ -224,6 +232,98 @@ const RAW = [
   { name: 'ai.playlist', group: 'ai', scope: 'read', label: 'Playlist from a description',
     description: 'Make a playlist from a description using only tracks in the library. Returns track ids and a title as a preview; nothing is saved until playlist.create. Without a host model it filters by tags and search.',
     input: obj({ description: str('What to play', { minLength: 1, maxLength: 500 }), length: int('Tracks wanted (default 25)', { minimum: 1, maximum: 200 }) }, ['description']) },
+
+  // ---------------------------------------------------------------- v1.x ----
+  { name: 'player.speed', group: 'player', scope: 'reversible', label: 'Playback speed',
+    description: 'Set the playback speed from 0.5 to 2, or step it up or down. Pitch is kept where the route supports it.',
+    input: { ...obj({ rate: num('Speed, 1 is normal', { minimum: 0.5, maximum: 2 }), step: oneOf(['up', 'down'], 'Step up or down') }), minProperties: 1, maxProperties: 1 },
+    keys: [{ key: ']', input: { step: 'up' }, label: 'Faster' }, { key: '[', input: { step: 'down' }, label: 'Slower' }] },
+  { name: 'player.stop_after_current', group: 'player', scope: 'reversible', label: 'Stop after this track',
+    description: 'Stop when the playing track ends. Without `on` it toggles.', input: obj({ on: bool('true arms it, false disarms it') }),
+    keys: [{ key: 'Shift+S' }] },
+  { name: 'player.sleep_timer', group: 'player', scope: 'reversible', label: 'Sleep timer',
+    description: 'Pause after a number of minutes (the last 10 seconds fade out), at the end of this track, or at the end of the queue. Mode off cancels it.',
+    input: { ...obj({ minutes: num('Minutes from now', { minimum: 1, maximum: 1440 }), mode: oneOf(['end-of-track', 'end-of-queue', 'off'], 'When to stop instead of minutes') }), minProperties: 1, maxProperties: 1 } },
+  { name: 'player.volume_db', group: 'player', scope: 'reversible', label: 'Volume in dB',
+    description: 'Set the volume in dB (0 is full, the floor setting is the quietest audible step), or change it by a number of dB. Give one of the two.',
+    input: { ...obj({ db: num('Volume in dB', { minimum: -90, maximum: 0 }), step: num('Change in dB', { minimum: -90, maximum: 90 }) }), minProperties: 1, maxProperties: 1 } },
+  { name: 'sound.mono', group: 'sound', scope: 'reversible', label: 'Mono',
+    description: 'Mix left and right into one channel on both speakers. Without `on` it toggles.', input: obj({ on: bool('true mixes to mono') }) },
+  { name: 'sound.volume_floor', group: 'sound', scope: 'reversible', label: 'Volume floor',
+    description: 'The quietest audible step of the volume slider, from -90 to -1 dB (default -50).',
+    input: obj({ db: num('Floor in dB', { minimum: -90, maximum: -1 }) }, ['db']) },
+  { name: 'sound.devices', group: 'sound', scope: 'read', label: 'Output devices',
+    description: 'The audio outputs this browser offers (id and label) and the one in use. Empty where the browser cannot pick an output.', input: obj() },
+  { name: 'sound.output', group: 'sound', scope: 'reversible', label: 'Output device',
+    description: 'Play through another audio output by its id from sound.devices; an empty id is the system default.',
+    input: obj({ deviceId: str('Device id', { maxLength: 256 }) }, ['deviceId']) },
+  { name: 'eq.import_eqf', group: 'sound', scope: 'reversible', label: 'Import Winamp EQ',
+    description: 'Load a Winamp .eqf preset file chosen by the person into the custom equaliser curve. `presetIndex` picks one preset from a library file (default 0).',
+    input: obj({ presetIndex: int('Preset in the file', { minimum: 0, maximum: 1000 }) }) },
+  { name: 'eq.export_eqf', group: 'sound', scope: 'read', label: 'Export Winamp EQ',
+    description: 'Save the current equaliser curve as a Winamp .eqf file.', input: obj({ name: str('Preset name', { minLength: 1, maxLength: 200 }) }) },
+
+  { name: 'library.duplicates', group: 'library', scope: 'read', label: 'Duplicates',
+    description: 'Groups of tracks that look like the same recording: exact (same size and length) or likely (same artist and title within 2 seconds), with the suggested keeper. Nothing is deleted.',
+    input: obj({ kind: oneOf(['exact', 'likely'], 'Only this kind'), ...page() }) },
+  { name: 'library.folders', group: 'library', scope: 'read', label: 'Music folders',
+    description: 'The music folders in the library: id, name, whether it is the primary folder, and whether the read grant is live.', input: obj() },
+  { name: 'library.add_folder', group: 'library', scope: 'reversible', label: 'Add a music folder',
+    description: 'Ask the person for another music folder and index it. Removing it again is library.forget_folder.', input: obj() },
+  { name: 'library.forget_folder', group: 'library', scope: 'destructive', label: 'Remove a music folder',
+    description: 'Remove a folder and its tracks and playlists from the library index. The files on disk are untouched.',
+    input: obj({ id: str('Folder id from library.folders', { minLength: 1, maxLength: 16 }) }, ['id']) },
+  { name: 'library.rescan_folder', group: 'library', scope: 'reversible', label: 'Rescan',
+    description: 'Rescan one folder by id, or every folder when `id` is absent.', input: obj({ id: str('Folder id', { minLength: 1, maxLength: 16 }) }) },
+  { name: 'tags.rename_files', group: 'library', scope: 'destructive', label: 'Rename files from tags',
+    description: 'Rename audio files from a pattern of tags, such as "%track% - %title%". Shows every old and new name and waits for approval. Chromium only.',
+    input: obj({ ids: trackIds('Tracks to rename'), pattern: str('Pattern with %artist% %album% %albumartist% %title% %track% %disc% %year% %genre%', { minLength: 1, maxLength: 200 }) }, ['pattern']) },
+  { name: 'tags.find_replace', group: 'library', scope: 'destructive', label: 'Find and replace in tags',
+    description: 'Replace text in title, artist, album, album artist or genre tags. Shows every change and waits for approval.',
+    input: obj({
+      ids: trackIds('Tracks to change'),
+      find: str('Text or pattern to find', { minLength: 1, maxLength: 200 }),
+      replace: str('Replacement', { maxLength: 200 }),
+      fields: { type: 'array', items: oneOf(RENAME_FIELDS, 'Field'), minItems: 1, description: 'Fields to change (default all five)' },
+      regex: bool('Treat `find` as a regular expression'),
+      caseSensitive: bool('Match case'),
+    }, ['find']) },
+  { name: 'tags.lookup_musicbrainz', group: 'library', scope: 'read', label: 'Look up on MusicBrainz',
+    description: 'Search MusicBrainz for the album of these tracks (or the album and artist given) and return releases and per-track tag changes as a preview. Needs MusicBrainz turned on.',
+    input: obj({ ids: trackIds(), album: str('Album name', { maxLength: 200 }), artist: str('Artist name', { maxLength: 200 }), mbid: mbid('A release id to fetch tag changes for') }) },
+  { name: 'tags.fetch_cover', group: 'library', scope: 'read', label: 'Preview a cover',
+    description: 'Fetch a release\'s front cover from the Cover Art Archive as a preview. Writing it goes through track.edit_tags with coverFrom.',
+    input: obj({ mbid: mbid('MusicBrainz release id') }, ['mbid']) },
+  { name: 'lyrics.fetch', group: 'library', scope: 'read', label: 'Find lyrics online',
+    description: 'Look up lyrics on LRCLIB for a track (default: the playing track) and show them. Nothing is saved. Needs LRCLIB turned on.',
+    input: obj({ id: str('Track id', { minLength: 1 }) }) },
+  { name: 'lyrics.save_sidecar', group: 'library', scope: 'reversible', label: 'Save lyrics beside the track',
+    description: 'Fetch lyrics from LRCLIB and write them as a .lrc file beside the track. Undo removes the new file.',
+    input: obj({ id: str('Track id', { minLength: 1 }) }) },
+
+  { name: 'queue.more_like_this', group: 'queue', scope: 'reversible', label: 'More like this',
+    description: 'Add tracks like the playing one to the end of the queue: by shared tags, reranked by the host model when there is one.',
+    input: obj({ length: int('Tracks to add (default 10)', { minimum: 1, maximum: 50 }) }) },
+  { name: 'ai.suggest_genres', group: 'ai', scope: 'read', label: 'Suggest missing genres',
+    description: 'Ask the host model for a genre for each album that has none. Returns suggestions only; each approved album is written with track.edit_tags.',
+    input: obj({ maxAlbums: int('Most albums to ask about (default 200)', { minimum: 1, maximum: 200 }) }) },
+  { name: 'ui.command_bar', group: 'view', scope: 'read', label: 'Command bar',
+    description: 'Open the command bar: type a request in words and it runs one command. Destructive commands are never run from it.',
+    input: obj({ text: str('Request to fill in', { maxLength: 300 }) }), keys: [{ key: 'Mod+K' }] },
+  { name: 'view.skins', group: 'view', scope: 'read', label: 'Classic skin face',
+    description: 'Open the classic skin face: pick a .wsz skin file from disk and control playback through it. The sound still comes from NakliAmp.', input: obj() },
+
+  { name: 'network.list', group: 'network', scope: 'read', label: 'Network services',
+    description: 'The online services NakliAmp can use, what each one receives, and whether the person turned it on. All are off by default.', input: obj() },
+  { name: 'network.grant', group: 'network', scope: 'reversible', label: 'Turn a service on',
+    description: 'Allow NakliAmp to contact one service. Nothing is sent to it until this is on.',
+    input: obj({ origin: oneOf(NETWORK_ORIGINS, 'Service origin') }, ['origin']) },
+  { name: 'network.revoke', group: 'network', scope: 'reversible', label: 'Turn a service off',
+    description: 'Stop NakliAmp contacting one service.', input: obj({ origin: oneOf(NETWORK_ORIGINS, 'Service origin') }, ['origin']) },
+  { name: 'scrobble.status', group: 'network', scope: 'read', label: 'Scrobbling status',
+    description: 'ListenBrainz scrobbling: whether it is on, whether a token is set (never the token), listens waiting, listens refused, and the next send time.', input: obj() },
+  { name: 'scrobble.flush', group: 'network', scope: 'reversible', label: 'Send listens now',
+    description: 'Send waiting listens to ListenBrainz now.', input: obj() },
 ];
 
 function freezeDeep(value) {
@@ -235,7 +335,7 @@ export const COMMANDS = freezeDeep(RAW.map(c => (c.keys ? { ...c, shortcut: c.ke
 export const commandByName = new Map(COMMANDS.map(c => [c.name, c]));
 export const GROUP_LABELS = Object.freeze({
   player: 'Playback', queue: 'Queue', library: 'Library', playlist: 'Playlists',
-  sound: 'Sound', visualiser: 'Visualiser', view: 'View', ai: 'AI',
+  sound: 'Sound', visualiser: 'Visualiser', view: 'View', ai: 'AI', network: 'Network',
 });
 
 /** The NakliOS rail knows read, write and destructive; NakliAmp's reversible commands are writes. */

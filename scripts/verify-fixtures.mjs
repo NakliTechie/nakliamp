@@ -35,4 +35,9 @@ if (r3 !== 3) throw new Error('The gate requires three R3 software-decode fixtur
 const wasm = manifest.fixtures.filter(item => item.role === 'audio-wasm').length;
 if (wasm !== 7) throw new Error('The gate requires seven wasm-decode fixtures.');
 
-console.log(`PASS — Golden audio: ${manifest.fixtures.length} files; 7 positives; 1 WMA refusal; ${r3} R3; ${wasm} wasm`);
+// A wasm-tier file with a second stream (cover art), so the gate can prove the
+// read loop does not end the track at a batch holding only the other stream.
+const secondStream = manifest.fixtures.filter(item => item.role === 'audio-wasm-second-stream').length;
+if (secondStream !== 1) throw new Error('The gate requires one wasm fixture with a second stream.');
+
+console.log(`PASS — Golden audio: ${manifest.fixtures.length} files; 7 positives; 1 WMA refusal; ${r3} R3; ${wasm} wasm; ${secondStream} second-stream`);

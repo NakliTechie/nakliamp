@@ -76,9 +76,9 @@ if (FULL) {
   // The embedded wasm is handed to libav as a blob URL, and fetching a blob is
   // governed by connect-src. Still no remote origin: blob: is same-origin data
   // this page created.
-  const widened = html.replace("connect-src 'self'", "connect-src 'self' blob:");
-  if (widened === html) throw new Error('The full build could not widen connect-src for the wasm blob.');
-  html = widened;
+  // Since v1.x the page itself allows blob: in connect-src (the skin face
+  // fetches a picked .wsz through one), so the full build only checks it.
+  if (!/connect-src[^;]*\bblob:/.test(html)) throw new Error('The full build needs connect-src to allow blob: for the wasm.');
   html = html.replace(
     "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';",
     "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';\n"

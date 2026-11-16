@@ -106,3 +106,20 @@ also obtain the source from `https://github.com/Vanilagy/mediabunny/tree/v1.51.0
 | `vendor/butterchurn/presets-3.0.0-beta.4.mjs` | `a500b2b85493c37a4001033544294bdb288d0607cc591ec438562149adce4b5e` |
 | `vendor/butterchurn/LICENSE-MIT.txt` | `e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98` |
 | `vendor/butterchurn/LICENSE-presets-MIT.txt` | `e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98` |
+
+## Webamp: classic skin face (since v1.x)
+
+- `webamp` 2.3.1, MIT, Jordan Eldredge, `https://github.com/captbaritone/webamp`. `built/webamp.bundle.min.mjs`
+  (SHA-256 `41817e47fdb1f969a74e0202135e72d080d73236f5f0a7709f17b696784e0035`) with only its last line, the
+  `sourceMappingURL` comment, removed so the browser requests no map file.
+- NakliAmp drives it through Webamp's `__customMediaClass` option, so NakliAmp's engine plays every sound and
+  Webamp only draws the skin. Loaded only when the person picks a `.wsz` file; not inlined in the single-file
+  builds.
+- The bundle carries Nullsoft's default skin art, which Webamp uses for parts a skin lacks. NakliAmp loads only a
+  `.wsz` that contains the main window, title bar and playlist bitmaps, so that art does not show for a normal
+  skin. The Winamp name and interface are Nullsoft's (Webamp README); NakliAmp says "classic skins".
+
+| Path | SHA-256 |
+|---|---|
+| `vendor/webamp/webamp-2.3.1.bundle.min.mjs` | `ff0f3eeae23608d68e941a16e9261a67d1122f42e55c56cbd0eb7c83aedd70c6` |
+| `vendor/webamp/LICENSE-MIT.txt` | `fc7f2696d3e70b5c04659de0a843c1d7defebbb14eb2a07a38808fead88d9279` |
