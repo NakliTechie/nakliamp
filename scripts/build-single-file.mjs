@@ -110,11 +110,18 @@ const licence = await readFile(resolve(root, 'vendor/mediabunny/LICENSE-MPL-2.0.
 // Licences of the other vendored libraries the page imports. Each travels in
 // the artifact as its own inert block, like the Mediabunny licence.
 const EXTRA_LICENCES = Object.freeze([
+  ['nakliamp-licence', 'LICENSE'],
   ['music-metadata-licences', 'vendor/music-metadata/LICENSES.txt'],
   ['butterchurn-licence', 'vendor/butterchurn/LICENSE-MIT.txt'],
   ['butterchurn-presets-licence', 'vendor/butterchurn/LICENSE-presets-MIT.txt'],
 ]);
-const extraLicences = await Promise.all(EXTRA_LICENCES.map(async ([id, path]) => [id, await readFile(resolve(root, path), 'utf8')]));
+// The full build embeds the libav wasm, so LGPL-2.1 obliges its licence text
+// and the corresponding-source notice to travel inside that file too.
+const LIBAV_LICENCES = FULL ? [
+  ['libav-lgpl-licence', 'vendor/libav/LICENSE-LGPL-2.1.txt'],
+  ['libav-lgpl-notice', 'vendor/libav/LICENSE-LGPL-NOTICE.md'],
+] : [];
+const extraLicences = await Promise.all([...EXTRA_LICENCES, ...LIBAV_LICENCES].map(async ([id, path]) => [id, await readFile(resolve(root, path), 'utf8')]));
 const vendorNotice = await readFile(resolve(root, 'VENDOR.md'), 'utf8');
 
 /**

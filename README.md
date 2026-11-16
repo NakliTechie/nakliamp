@@ -113,8 +113,8 @@ The committed release gate is Chromium-only. Safari and Firefox behaviour is not
 
 ## License
 
-The repository has no licence file yet. Vendored code keeps its own licence (Mediabunny MPL-2.0,
-libav.js LGPL-2.1, music-metadata, Butterchurn and Webamp MIT); `VENDOR.md` lists each one.
+NakliAmp's own code is MIT ([LICENSE](LICENSE)). Vendored code keeps its own licence (`VENDOR.md`): Mediabunny
+MPL-2.0, libav.js LGPL-2.1 with its source notice, music-metadata, Butterchurn and Webamp MIT (neutral skin art).
 
 What shipped: [docs/specs/nakliamp-parity-001.md](docs/specs/nakliamp-parity-001.md) · vendored
 code: [VENDOR.md](VENDOR.md) · for agents: [commands.json](commands.json)

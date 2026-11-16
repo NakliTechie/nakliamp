@@ -47,6 +47,11 @@ assert(/connect-src 'self'/.test(html), 'The artifact CSP no longer restricts ne
 
 // MPL-2.0 obliges the licence to travel with the code, and this file travels alone.
 assert(/id="mediabunny-licence"/.test(html), 'The artifact does not carry the Mediabunny licence.');
+assert(/id="nakliamp-licence"/.test(html), 'The artifact does not carry NakliAmp\'s own licence.');
+if (target.includes('full')) {
+  assert(/id="libav-lgpl-licence"/.test(html) && /id="libav-lgpl-notice"/.test(html),
+    'The full artifact embeds libav but not its LGPL-2.1 text and source notice.');
+}
 assert(/Mozilla Public License/.test(html), 'The embedded licence text is missing.');
 assert(
   /github\.com\/Vanilagy\/mediabunny\/tree\/v1\.51\.0/.test(html),
