@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp promo-fix gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:900px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// Layout regression gate for the seven UI defects seen while capturing the promo
+// videos (2026-11-17), driven through the real page in an iframe the way
+// test/v1-features.html drives it. The iframe's size is the window size.
+//
+// 1. The track row menu opens beside its ⋮ button.
+// 2. A track tag of 0 shows blank and sorts after numbered tracks.
+// 3. The mini player's labels sit in the vertical middle of their buttons.
+// 4. Radios and checkboxes in Sound and Sleep timer use the theme accent, light and dark.
+// 5. The page is no taller than the window on the main views, at several sizes.
+// 6. The library start card's note is centred under the card.
+// 7. In the AI playlist dialog only the track list scrolls.
+//
+// Each check runs even when an earlier one failed. The gate passes only when every
+// check passes and the page logged no console error. No timing assertions.
+
+const FOLDER = 'nakliamp-promo-fix-harness';
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const passed = [];
+const failed = [];
+const notes = {};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await sleep(40);
+  }
+  throw new Error(typeof message === 'function' ? await message() : message);
+}
+
+async function check(id, fn) {
+  try {
+    await fn();
+    passed.push(id);
+  } catch (error) {
+    failed.push(`${id}: ${String(error?.message ?? error).slice(0, 600)}`);
+  }
+}
+
+// ------------------------------------------------------------- fixtures ----
+
+const enc = new TextEncoder();
+const synchsafe = n => [(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127];
+const id3Frame = (id, body) => [...enc.encode(id), ...synchsafe(body.length), 0, 0, ...body];
+const textFrame = (id, value) => id3Frame(id, [3, ...enc.encode(value)]);
+
+function taggedMp3(audio, frames) {
+  const bytes = new Uint8Array(audio);
+  let start = 0;
+  if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    start = 10 + ((bytes[6] << 21) | (bytes[7] << 14) | (bytes[8] << 7) | bytes[9]);
+  }
+  const body = frames.flat();
+  const header = [0x49, 0x44, 0x33, 4, 0, 0, ...synchsafe(body.length)];
+  return new Blob([new Uint8Array([...header, ...body]), bytes.subarray(start)], { type: 'audio/mpeg' });
+}
+
+async function writeFile(directory, name, data) {
+  const handle = await directory.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(data);
+  await writable.close();
+}
+
+// Two albums: "Numbered" (tracks 1 and 2) and "Zero Sampler", whose files all carry
+// the track tag "0" except one numbered 1, plus twelve "Tone" tracks so the AI
+// preview list is long enough to scroll in a short window.
+const ZERO_TITLES = ['Cherokee', 'Autumn Leaves', 'Blue Monk'];
+async function buildFolder() {
+  const opfs = await navigator.storage.getDirectory();
+  try { await opfs.removeEntry(FOLDER, { recursive: true }); } catch { /* not there */ }
+  const root = await opfs.getDirectoryHandle(FOLDER, { create: true });
+  const response = await fetch('fixtures/audio-mp3.mp3');
+  assert(response.ok, `Fixture audio-mp3.mp3 did not load (${response.status}).`);
+  const mp3 = await response.arrayBuffer();
+  const numbered = await root.getDirectoryHandle('Numbered', { create: true });
+  for (const [no, title] of [[1, 'Day Bird'], [2, 'Night Owl']]) {
+    await writeFile(numbered, `0${no} ${title}.mp3`, taggedMp3(mp3, [
+      textFrame('TIT2', title), textFrame('TPE1', 'Promo Artist'), textFrame('TALB', 'Numbered'), textFrame('TRCK', String(no)),
+    ]));
+  }
+  const zero = await root.getDirectoryHandle('Zero Sampler', { create: true });
+  for (const title of ZERO_TITLES) {
+    await writeFile(zero, `${title}.mp3`, taggedMp3(mp3, [
+      textFrame('TIT2', title), textFrame('TPE1', 'Sampler Artist'), textFrame('TALB', 'Zero Sampler'), textFrame('TRCK', '0'),
+    ]));
+  }
+  await writeFile(zero, 'Opener.mp3', taggedMp3(mp3, [
+    textFrame('TIT2', 'Opener'), textFrame('TPE1', 'Sampler Artist'), textFrame('TALB', 'Zero Sampler'), textFrame('TRCK', '1'),
+  ]));
+  const tones = await root.getDirectoryHandle('Tones', { create: true });
+  for (let i = 1; i <= 12; i += 1) {
+    await writeFile(tones, `Tone ${String(i).padStart(2, '0')}.mp3`, taggedMp3(mp3, [
+      textFrame('TIT2', `Tone ${String(i).padStart(2, '0')}`), textFrame('TPE1', 'Tone Maker'), textFrame('TALB', 'Tones'),
+      textFrame('TCON', 'Ambient'), textFrame('TRCK', String(i)),
+    ]));
+  }
+  return root;
+}
+
+const TRACK_COUNT = 2 + ZERO_TITLES.length + 1 + 12;
+
+// ------------------------------------------------------------------ run ----
+
+async function run() {
+  const root = await buildFolder();
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  notes.pageErrorGuard = app.__errs ? 'runner guard' : 'installed after boot';
+  if (!app.__errs) {
+    app.__errs = [];
+    const original = app.console.error.bind(app.console);
+    app.console.error = (...args) => { app.__errs.push(args.map(String).join(' ')); original(...args); };
+    app.addEventListener('error', event => app.__errs.push(`error: ${event.message}`));
+    app.addEventListener('unhandledrejection', event => app.__errs.push(`rejection: ${event.reason?.stack ?? event.reason}`));
+  }
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+  const $ = selector => doc.querySelector(selector);
+  const frameTick = () => new Promise(resolve => app.requestAnimationFrame(() => app.requestAnimationFrame(resolve)));
+  const visible = node => Boolean(node) && node.getClientRects().length > 0;
+  const resize = async (width, height) => {
+    frame.style.width = `${width}px`;
+    frame.style.height = `${height}px`;
+    await waitFor(() => app.innerWidth === width && app.innerHeight === height, () => `The window is ${app.innerWidth}x${app.innerHeight}, not ${width}x${height}.`);
+    await frameTick();
+    await frameTick();
+  };
+  const closeDialogs = async () => { await harness.run('view.close'); await frameTick(); };
+  const overflow = () => doc.documentElement.scrollHeight - app.innerHeight;
+  // The theme's accent as a computed colour, read from a probe in the page.
+  const themeAccent = () => {
+    const probe = doc.createElement('span');
+    probe.style.color = 'var(--accent)';
+    doc.body.append(probe);
+    const colour = app.getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  };
+
+  // ---- 6 and 5. the empty start page -----------------------------------------
+  // With no folder the page opens on the drop view; the start card is the Library tab.
+  await check('5: the empty drop view is no taller than the window', async () => {
+    assert(harness.view() === 'empty', `The page opened on ${harness.view()}, not the drop view.`);
+    for (const [w, h] of [[1280, 900], [1024, 700]]) {
+      await resize(w, h);
+      assert(overflow() <= 0, `The drop view is ${overflow()} px taller than the window at ${w}x${h}.`);
+    }
+    await resize(1280, 900);
+  });
+  await harness.run('view.open', { view: 'library' });
+  await frameTick();
+
+  await check('6: the start card note is centred under the card', async () => {
+    const card = await waitFor(() => visible($('#lib-welcome')) && $('#lib-welcome'), 'The library start card is not showing.');
+    const note = $('#library .lib-note');
+    assert(visible(note), 'The note under the start card is not showing.');
+    assert(app.getComputedStyle(note).textAlign === 'center', `The note is aligned ${app.getComputedStyle(note).textAlign}.`);
+    // The centre of the note's text line is the centre of the card.
+    const range = doc.createRange();
+    range.selectNodeContents(note);
+    const text = range.getBoundingClientRect();
+    const box = card.getBoundingClientRect();
+    const offset = Math.abs((text.left + text.right) / 2 - (box.left + box.right) / 2);
+    assert(offset <= 2, `The note's text is ${offset.toFixed(1)} px off the card's centre.`);
+  });
+
+  const sizes = [[1280, 900], [1024, 700], [375, 812]];
+  await check('5: the empty start page is no taller than the window', async () => {
+    const seen = [];
+    for (const [w, h] of sizes) {
+      await resize(w, h);
+      seen.push(`${w}x${h}: ${doc.documentElement.scrollHeight}/${app.innerHeight}`);
+      assert(overflow() <= 0, `The start page is ${overflow()} px taller than the window at ${w}x${h}.`);
+    }
+    notes.startPage = seen;
+    await resize(1280, 900);
+  });
+
+  // ---- scan --------------------------------------------------------------------
+  await harness.adoptFolder(root);
+  await harness.openLibrary();
+  await waitFor(() => harness.libraryTracks() === TRACK_COUNT, () => `Scan indexed ${harness.libraryTracks()} of ${TRACK_COUNT} tracks.`, 30_000);
+  const tracks = () => harness.tracks();
+  const idOf = title => {
+    const track = tracks().find(item => item.title === title);
+    assert(track, `No track titled ${title} in the index.`);
+    return track.id;
+  };
+
+  $('#lib-tab-browse').click();
+  const browseRoot = await waitFor(() => $('#lib-browse .nb'), 'The Browse tab mounted nothing.');
+  const viewSelect = browseRoot.querySelector('select[aria-label="Library view"]');
+  const setBrowse = async view => {
+    viewSelect.value = view;
+    viewSelect.dispatchEvent(new app.Event('change', { bubbles: true }));
+    await frameTick();
+  };
+  const openAlbum = async name => {
+    await setBrowse('albums');
+    const card = await waitFor(() => [...browseRoot.querySelectorAll('.nb-card')].find(node => node.textContent.includes(name)), `No ${name} card.`);
+    card.click();
+    await frameTick();
+  };
+  const rowsShown = () => [...browseRoot.querySelectorAll('.nb-window [data-index]')];
+  const rowTitle = row => row.querySelector('.nb-title')?.textContent;
+
+  // ---- 2. track 0 ---------------------------------------------------------------
+  await check('2: a track tag of 0 is blank on the album page and sorts after numbered tracks', async () => {
+    const zero = tracks().filter(track => track.album === 'Zero Sampler' && track.title !== 'Opener');
+    assert(zero.length === 3 && zero.every(track => track.trackNo === 0), `Index kept ${JSON.stringify(zero.map(track => track.trackNo))}, expected the tag's 0.`);
+    await openAlbum('Zero Sampler');
+    const rows = rowsShown();
+    const titles = rows.map(rowTitle);
+    assert(JSON.stringify(titles) === JSON.stringify(['Opener', 'Autumn Leaves', 'Blue Monk', 'Cherokee']), `Album order ${JSON.stringify(titles)}.`);
+    const numbers = rows.map(row => row.querySelector('.nb-no')?.textContent);
+    assert(JSON.stringify(numbers) === JSON.stringify(['1', '', '', '']), `Number column ${JSON.stringify(numbers)}.`);
+  });
+
+  // ---- 1. track menu -------------------------------------------------------------
+  await check('1: the ⋮ menu opens beside its button', async () => {
+    await openAlbum('Numbered');
+    const row = rowsShown().find(node => rowTitle(node) === 'Day Bird');
+    assert(row, 'No Day Bird row.');
+    const button = row.querySelector('[data-more]');
+    const box = button.getBoundingClientRect();
+    button.click();
+    const menu = await waitFor(() => { const node = browseRoot.querySelector('.nb-menu'); return node && !node.hidden && node; }, 'The ⋮ menu did not open.');
+    await frameTick();
+    const place = menu.getBoundingClientRect();
+    notes.menu = { button: [Math.round(box.left), Math.round(box.bottom)], menu: [Math.round(place.left), Math.round(place.top)] };
+    assert(place.top >= box.bottom - 2 && place.top - box.bottom <= 12, `Menu top ${place.top.toFixed(0)} is not just below the button (bottom ${box.bottom.toFixed(0)}).`);
+    assert(place.right >= box.left && place.left <= box.right, `Menu ${place.left.toFixed(0)}..${place.right.toFixed(0)} does not line up with the button at ${box.left.toFixed(0)}..${box.right.toFixed(0)}.`);
+    doc.dispatchEvent(new app.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    menu.dispatchEvent(new app.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await frameTick();
+  });
+
+  // ---- 5. main views at several sizes ---------------------------------------------
+  await harness.run('queue.set', { ids: [idOf('Day Bird'), idOf('Night Owl')], startIndex: 0, play: false });
+  await waitFor(() => harness.playingId() === idOf('Day Bird'), 'The queue did not load Day Bird.');
+  await check('5: Library, Queue and Now playing are no taller than the window', async () => {
+    const seen = [];
+    for (const [w, h] of sizes) {
+      await resize(w, h);
+      for (const view of ['library', 'queue', 'now']) {
+        harness.openView(view);
+        await waitFor(() => harness.view() === view, () => `The page shows ${harness.view()}, not ${view}.`);
+        await frameTick();
+        seen.push(`${view} ${w}x${h}: ${doc.documentElement.scrollHeight}/${app.innerHeight}`);
+        assert(overflow() <= 0, `${view} is ${overflow()} px taller than the window at ${w}x${h}.`);
+      }
+      // The library list fills the space it is given rather than a fixed height. In a
+      // short window its minimum height wins and main scrolls (the page still fits).
+      if (w !== 1280) continue;
+      harness.openView('library');
+      await frameTick();
+      const list = browseRoot.querySelector('.nb-scroll').getBoundingClientRect();
+      const main = $('main').getBoundingClientRect();
+      assert(list.bottom <= main.bottom + 1, `At ${w}x${h} the list ends at ${list.bottom.toFixed(0)}, below main (${main.bottom.toFixed(0)}).`);
+    }
+    notes.views = seen;
+    await resize(1280, 900);
+  });
+
+  // ---- 3. mini player labels ---------------------------------------------------------
+  await check('3: the mini player labels sit in the middle of their buttons', async () => {
+    await harness.run('ui.mini', { on: true });
+    await frameTick();
+    const centred = [];
+    const measure = button => {
+      const range = doc.createRange();
+      range.selectNodeContents(button);
+      const text = range.getBoundingClientRect();
+      const box = button.getBoundingClientRect();
+      return { offset: Math.abs((text.top + text.bottom) / 2 - (box.top + box.bottom) / 2), label: button.textContent };
+    };
+    for (const id of ['#mini-exit', '#mini-pop']) {
+      const button = $(id);
+      if (!visible(button)) continue;
+      const { offset, label } = measure(button);
+      centred.push(`${label}: ${offset.toFixed(1)}`);
+      assert(offset <= 2, `${label} is ${offset.toFixed(1)} px off its button's middle.`);
+    }
+    // In the pop-out the same button reads "Back to the tab"; the rule is the same, so
+    // check that label in the page too.
+    const exit = $('#mini-exit');
+    const before = exit.textContent;
+    exit.textContent = 'Back to the tab';
+    const pop = measure(exit);
+    exit.textContent = before;
+    centred.push(`Back to the tab: ${pop.offset.toFixed(1)}`);
+    assert(pop.offset <= 2, `Back to the tab is ${pop.offset.toFixed(1)} px off its button's middle.`);
+    assert(centred.length >= 2, `Measured only ${centred.join(', ')}.`);
+    notes.mini = centred;
+    await harness.run('ui.mini', { on: false });
+    await frameTick();
+  });
+
+  // ---- 4. accent colour on native controls -------------------------------------------
+  for (const theme of ['light', 'dark']) {
+    await check(`4: Sound and Sleep timer controls use the ${theme} theme accent`, async () => {
+      await harness.run('ui.theme', { theme });
+      await frameTick();
+      const accent = themeAccent();
+      for (const view of ['sound', 'sleep']) {
+        await harness.openView(view);
+        const body = await waitFor(() => doc.querySelector('.nk-dlg-body'), `The ${view} dialog did not open.`);
+        const controls = await waitFor(() => { const list = [...body.querySelectorAll('input[type=radio], input[type=checkbox]')]; return list.length && list; }, `The ${view} dialog has no radios or checkboxes.`);
+        const wrong = controls.filter(input => app.getComputedStyle(input).accentColor !== accent)
+          .map(input => `${input.type} ${input.closest('label')?.textContent?.trim().slice(0, 30) ?? input.id}: ${app.getComputedStyle(input).accentColor}`);
+        assert(!wrong.length, `In ${view}, ${wrong.length} of ${controls.length} controls do not use ${accent}: ${wrong.join('; ')}.`);
+        if (view === 'sound') {
+          const clip = [...body.querySelectorAll('input[type=checkbox]')].find(input => /clipping/i.test(input.closest('label')?.textContent ?? input.parentElement?.textContent ?? ''));
+          assert(clip, 'The Sound panel has no Prevent clipping box.');
+        }
+        await closeDialogs();
+      }
+    });
+  }
+  await harness.run('ui.theme', { theme: 'light' });
+
+  // ---- 7. AI playlist dialog ----------------------------------------------------------
+  for (const [w, h] of [[1280, 900], [1280, 680]]) await check(`7: in the AI dialog only the track list scrolls (${w}x${h})`, async () => {
+    await resize(w, h);
+    await harness.openView('ai');
+    const dialog = await waitFor(() => doc.querySelector('.nk-ai'), 'The AI dialog did not open.');
+    const textarea = dialog.querySelector('textarea');
+    textarea.value = 'tone';
+    textarea.dispatchEvent(new app.Event('input', { bubbles: true }));
+    [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Generate').click();
+    const list = dialog.querySelector('ol');
+    await waitFor(() => list.querySelectorAll('li').length >= 10, () => `Preview rows: ${list.querySelectorAll('li').length}; ${dialog.querySelector('.status[role=status]').textContent}`);
+    await frameTick();
+    const body = dialog.closest('.nk-dlg-body');
+    const box = dialog.closest('.nk-dlg').getBoundingClientRect();
+    notes[`ai${h}`] = { list: [list.scrollHeight, list.clientHeight], body: [body.scrollHeight, body.clientHeight], dialog: Math.round(box.height), window: app.innerHeight };
+    assert(box.top >= 0 && box.bottom <= app.innerHeight, `The dialog (${box.top.toFixed(0)}..${box.bottom.toFixed(0)}) does not fit the ${app.innerHeight} px window.`);
+    assert(body.scrollHeight <= body.clientHeight + 1, `The dialog body scrolls (${body.scrollHeight} > ${body.clientHeight}).`);
+    assert(list.scrollHeight > list.clientHeight && app.getComputedStyle(list).overflowY === 'auto', `The list does not scroll (${list.scrollHeight}/${list.clientHeight}, ${app.getComputedStyle(list).overflowY}).`);
+    // Header, controls and actions stay inside the dialog.
+    const actions = dialog.querySelector('.actions').getBoundingClientRect();
+    assert(actions.bottom <= box.bottom && actions.top >= list.getBoundingClientRect().bottom - 1, 'The actions are not below the list inside the dialog.');
+    const scrollers = [...dialog.closest('.nk-dlg').querySelectorAll('*')].filter(node => {
+      const style = app.getComputedStyle(node);
+      return /auto|scroll/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+    });
+    assert(scrollers.length === 1 && scrollers[0] === list, `Scrolling elements: ${scrollers.map(node => node.tagName + '.' + node.className).join(', ')}.`);
+    await closeDialogs();
+    await resize(1280, 900);
+  });
+
+  const errors = [...(app.__errs ?? []), ...(window.__errs ?? [])];
+  return { errors };
+}
+
+run().then(({ errors }) => {
+  const ok = !failed.length && !errors.length;
+  result.dataset.status = ok ? 'pass' : 'fail';
+  result.textContent = JSON.stringify({ checks: passed.length + failed.length, passed: passed.length, failed, errors, notes }, null, 2);
+  document.title = `${ok ? 'PASS' : 'FAIL'} — NakliAmp promo-fix gate`;
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = JSON.stringify({ aborted: error.stack || String(error), passed: passed.length, failed, notes }, null, 2);
+  document.title = 'FAIL — NakliAmp promo-fix gate';
+});
+</script>
+</body>
+</html>

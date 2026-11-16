@@ -281,7 +281,7 @@ test('networkRows lists every known origin off by default, with what it sends', 
   assert.equal(rows.length, 4);
   assert.ok(rows.every(r => !r.granted));
   const caa = rows.find(r => r.label === 'Cover Art Archive');
-  assert.match(sendsText(caa), /^Sends: The MusicBrainz release id\..* Also contacts https:\/\/archive\.org and https:\/\/\*\.archive\.org\.$/);
+  assert.match(sendsText(caa), /^Turning this on sends coverartarchive\.org the MusicBrainz release id\..* Also contacts archive\.org and \*\.archive\.org\.$/);
   consent.grant('https://lrclib.net');
   assert.equal(networkRows(consent.list()).find(r => r.label === 'LRCLIB').granted, true);
   assert.equal(networkRows({ origins: [{ origin: 'https://x.test' }] })[0].label, 'https://x.test');

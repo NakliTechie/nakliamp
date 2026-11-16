@@ -81,7 +81,7 @@ for diagnostic_marker in L7_DECLARED_FAILURE L7_CONSOLE_SENTINEL l7-network-sent
   fi
 done
 
-for harness in golden-audio ui-smoke library library-e2e universal analyser wasm-decode single-file v1-features v1x-features; do
+for harness in golden-audio ui-smoke library library-e2e universal analyser wasm-decode single-file v1-features v1x-features agent-face review-b-crossfade review-c-keys promo-fixes; do
   profile_path="$profile_root/chrome-$harness"
   verify_run=1
   while [ "$verify_run" -le "$verify_repeats" ]; do

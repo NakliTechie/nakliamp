@@ -34,8 +34,16 @@ def clear_nakliamp(origin):
       const removed=[]; try{ const root=await navigator.storage.getDirectory();
         for await (const [name] of root.entries()) if (/nakliamp/i.test(name)) { await root.removeEntry(name,{recursive:true}); removed.push(name);} }catch(e){}
       return {keys, removed}; })()''')
-    raw('Target.closeTarget', {'targetId': c})
+    release(c)
     return r
+def release(target):
+    # Chrome may report closeTarget as done and leave the tab open, still holding
+    # NakliAmp's IndexedDB; the next run's deleteDatabase then blocks every open.
+    # Blank the tab first so it holds nothing, then ask Chrome to close it.
+    try: raw('Page.navigate', {'url': 'about:blank'}, target)
+    except Exception: pass
+    try: raw('Target.closeTarget', {'targetId': target})
+    except Exception: pass
 def run_harness(url, timeout=60):
     t = raw('Target.createTarget', {'url':'about:blank','background':False})['targetId']
     raw('Page.enable', {}, t)
@@ -83,5 +91,4 @@ if __name__=='__main__':
     finally:
         # Close the tab on success and on failure alike; never leave tabs open.
         if t and '--keep' not in sys.argv:
-            try: raw('Target.closeTarget', {'targetId':t})
-            except Exception: pass
+            release(t)
