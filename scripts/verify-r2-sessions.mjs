@@ -60,7 +60,7 @@ let leakedUrlFetchSucceeded = false;
 try {
   const response = await fetch(leakedUrl);
   leakedUrlFetchSucceeded = response.ok;
-} catch (_) {}
+} catch { /* fetch failure is the expected outcome */ }
 assert(!leakedUrlFetchSucceeded, 'The failed R2 factory leaked a fetchable object URL.');
 
 let canPlayThrowUrl = null;
@@ -84,7 +84,7 @@ let canPlayThrowFetchSucceeded = false;
 try {
   const response = await fetch(canPlayThrowUrl);
   canPlayThrowFetchSucceeded = response.ok;
-} catch (_) {}
+} catch { /* fetch failure is the expected outcome */ }
 assert(!canPlayThrowFetchSucceeded, 'The failed canPlayType check leaked a fetchable object URL.');
 
 const racePlayer = createNakliAmpEngine({

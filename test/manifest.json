@@ -107,6 +107,12 @@
       "bytes": 356444,
       "sha256": "8067b86d8ebe29fea8ff41c139a8ff13b1d9538fd10c6f0c3ca683bb80482394",
       "role": "audio-wasm"
+    },
+    {
+      "file": "audio-alac.m4a",
+      "bytes": 34838,
+      "sha256": "b5273852d95c3ce96021b1062cca0f8c3d104534810905d2d242270999d86f1b",
+      "role": "audio-wasm"
     }
   ]
 }

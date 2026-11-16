@@ -68,10 +68,11 @@ if (FULL) {
   // wasm and keeps the tighter policy; only the artifact that actually carries
   // a decoder gets the allowance, and 'wasm-unsafe-eval' does not re-enable
   // eval().
-  const before = html;
-  html = html.replace("script-src 'self' 'unsafe-inline' blob:",
-    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:");
-  if (html === before) throw new Error('The full build could not widen script-src for wasm.');
+  // Since v1 the lean page already allows wasm compilation too, because the
+  // Milkdrop visualiser compiles preset equations to WebAssembly. The guard
+  // stays so a page that lost the allowance cannot ship a full build that
+  // would refuse every wasm decode.
+  if (!html.includes("'wasm-unsafe-eval'")) throw new Error('The full build needs script-src to allow wasm.');
   // The embedded wasm is handed to libav as a blob URL, and fetching a blob is
   // governed by connect-src. Still no remote origin: blob: is same-origin data
   // this page created.
@@ -106,6 +107,14 @@ if (FULL) {
 }
 
 const licence = await readFile(resolve(root, 'vendor/mediabunny/LICENSE-MPL-2.0.txt'), 'utf8');
+// Licences of the other vendored libraries the page imports. Each travels in
+// the artifact as its own inert block, like the Mediabunny licence.
+const EXTRA_LICENCES = Object.freeze([
+  ['music-metadata-licences', 'vendor/music-metadata/LICENSES.txt'],
+  ['butterchurn-licence', 'vendor/butterchurn/LICENSE-MIT.txt'],
+  ['butterchurn-presets-licence', 'vendor/butterchurn/LICENSE-presets-MIT.txt'],
+]);
+const extraLicences = await Promise.all(EXTRA_LICENCES.map(async ([id, path]) => [id, await readFile(resolve(root, path), 'utf8')]));
 const vendorNotice = await readFile(resolve(root, 'VENDOR.md'), 'utf8');
 
 /**
@@ -188,6 +197,13 @@ appScript = appScript.replace(
   (_match, bindings, _quote, specifier) =>
     `const {${bindings}} = await import(__nakliampModule(${JSON.stringify(posix.normalize(specifier.replace(/^\.\//, '')))}));`,
 );
+// The namespace form, `import * as name from './x.mjs'`, binds the module object itself.
+appScript = appScript.replace(
+  /import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*(['"])(\.{1,2}\/[^'"]+)\2;?/g,
+  (_match, name, _quote, specifier) =>
+    `const ${name} = await import(__nakliampModule(${JSON.stringify(posix.normalize(specifier.replace(/^\.\//, '')))}));`,
+);
+if (/^\s*import\s[^(]/m.test(appScript)) throw new Error('index.html uses an import form the single-file build does not rewrite.');
 
 // A boot marker, so a gate can tell "the page rendered" from "the app ran".
 // Static HTML renders either way; only this proves the modules instantiated.
@@ -221,7 +237,8 @@ const scriptBlock = `<script type="module">\n${
 
 const licenceBlock = `<script type="application/vnd.nakliamp.licence" id="mediabunny-licence">\n${
   licence.replace(/<\/script>/gi, '<\\/script>')
-}\n</script>\n</body>`;
+}\n</script>\n${extraLicences.map(([id, text]) =>
+  `<script type="application/vnd.nakliamp.licence" id="${id}">\n${text.replace(/<\/script>/gi, '<\\/script>')}\n</script>\n`).join('')}</body>`;
 
 const output = html
   .replace('<!DOCTYPE html>', insert(`<!DOCTYPE html>\n${banner}`))

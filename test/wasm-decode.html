@@ -24,6 +24,47 @@ async function fixture(name) {
   return new File([await response.arrayBuffer()], name);
 }
 
+// The DSD fixture is one second; ALAC two; Musepack lands near three; the rest five.
+const DURATION_FLOOR = { dsd: 0.5, alac: 1.5, musepack: 3 };
+
+async function checkFullBuild(name, container, mime) {
+  // No browser decodes these; if one starts, this gate is testing nothing.
+  assert(!document.createElement('audio').canPlayType(mime), `${name}: this browser now plays ${mime}.`);
+
+  const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM, libavDecoder] });
+  const loaded = await engine.load(await fixture(name));
+  const state = engine.state();
+
+  // ALAC is the one exception: Chromium's WebCodecs decodes it (observed in
+  // Chrome 2026-11-16), so it rightly stays on the engine rung there. The
+  // wasm rung is what carries it where WebCodecs does not (Firefox).
+  const allowed = container === 'alac' ? ['r1', 'r3'] : ['r3'];
+  assert(allowed.includes(loaded.path), `${name} loaded on ${loaded.path}, expected ${allowed.join(' or ')}.`);
+  if (loaded.path === 'r3') {
+    assert(state.honesty.decode.includes('libav'), `${name}: strip hid the wasm tier: ${state.honesty.decode}`);
+  }
+  const floor = DURATION_FLOOR[container] ?? 4;
+  assert(state.media.duration > floor,
+    `${name}: decoded ${state.media.duration}s, expected over ${floor}.`);
+  assert(state.track.sampleRate > 20000, `${name}: rate ${state.track.sampleRate}.`);
+
+  await engine.play();
+  await new Promise(r => setTimeout(r, 150));
+  assert(engine.state().clock.playing, `${name}: not playing.`);
+  assert(engine.state().clock.positionS > 0, `${name}: clock did not advance.`);
+  engine.pause();
+  return { path: loaded.path, seconds: +state.media.duration.toFixed(2) };
+}
+
+async function checkLeanBuild(name) {
+  let refusal = null;
+  const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM] });
+  try { await engine.load(await fixture(name)); } catch (error) { refusal = error; }
+  assert(refusal, `${name}: the lean build played a format it has no decoder for.`);
+  assert(refusal.code, `${name}: refusal carried no code.`);
+  return refusal.code;
+}
+
 async function run() {
   const report = {};
 
@@ -34,40 +75,12 @@ async function run() {
     ['audio-musepack.mpc', 'musepack', 'audio/x-musepack'],
     ['audio-tta.tta', 'tta', 'audio/x-tta'],
     ['audio-dsd.dsf', 'dsd', 'audio/x-dsd'],
+    ['audio-alac.m4a', 'alac', 'audio/mp4; codecs="alac"'],
   ];
-  for (const [name, container, mime] of CASES) {
-    // No browser decodes these; if one starts, this gate is testing nothing.
-    assert(!document.createElement('audio').canPlayType(mime), `${name}: this browser now plays ${mime}.`);
-
-    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM, libavDecoder] });
-    const loaded = await engine.load(await fixture(name));
-    const state = engine.state();
-
-    assert(loaded.path === 'r3', `${name} loaded on ${loaded.path}, expected r3.`);
-    assert(state.honesty.decode.includes('libav'), `${name}: strip hid the wasm tier: ${state.honesty.decode}`);
-    // The DSD fixture is one second; Musepack lands near three; the rest five.
-    const floor = container === 'dsd' ? 0.5 : container === 'musepack' ? 3 : 4;
-    assert(state.media.duration > floor,
-      `${name}: decoded ${state.media.duration}s, expected over ${floor}.`);
-    assert(state.track.sampleRate > 20000, `${name}: rate ${state.track.sampleRate}.`);
-
-    await engine.play();
-    await new Promise(r => setTimeout(r, 150));
-    assert(engine.state().clock.playing, `${name}: not playing.`);
-    assert(engine.state().clock.positionS > 0, `${name}: clock did not advance.`);
-    engine.pause();
-    report[container] = { path: loaded.path, seconds: +state.media.duration.toFixed(2) };
-  }
+  for (const [name, container, mime] of CASES) report[container] = await checkFullBuild(name, container, mime);
 
   // The lean build refuses both, by name, and does not retry them.
-  for (const [name] of CASES) {
-    let refusal = null;
-    const engine = createNakliAmpEngine({ version: 'gate', softwareDecoders: [PCM] });
-    try { await engine.load(await fixture(name)); } catch (error) { refusal = error; }
-    assert(refusal, `${name}: the lean build played a format it has no decoder for.`);
-    assert(refusal.code, `${name}: refusal carried no code.`);
-    report[`lean:${name}`] = refusal.code;
-  }
+  for (const [name] of CASES) report[`lean:${name}`] = await checkLeanBuild(name);
 
   // Two decodes of the same container at once must not share a scratch file.
   //
@@ -106,7 +119,7 @@ async function run() {
     broken.set([0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11]);
     let refusals = 0;
     for (let round = 0; round < 25; round += 1) {
-      try { await libavDecoder.decode(broken); } catch (error) { refusals += 1; }
+      try { await libavDecoder.decode(broken); } catch { refusals += 1; }
     }
     assert(refusals === 25, `${25 - refusals} malformed files decoded without error.`);
     const after = await libavDecoder.decode(new Uint8Array(await (await fixture('audio-wmav2.wma')).arrayBuffer()));

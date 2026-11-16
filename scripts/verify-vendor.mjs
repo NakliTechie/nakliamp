@@ -8,11 +8,17 @@ const expected = Object.freeze({
   'engine/reel-engine.mjs': '791a691fd8d0d95c9cf7fd27adf3bad2469c918f15e30ed9e57f05d0dad4c175',
   'vendor/mediabunny/mediabunny-1.51.0.min.mjs': '1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b',
   'vendor/mediabunny/LICENSE-MPL-2.0.txt': '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04',
-  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm': 'e2a952132a942ee59f7d7624378e4f60568d120157e428e82a59e06b5ead7829',
-  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs': '4c679eab179d5f9307611fb349edca62cf264a511ebbf66aaa94ea795a6cd4b6',
+  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm': 'cdc5ce039f8e584f01a22d94e5026a17caa61d870978920a29c898ac39b46cd3',
+  'vendor/libav/libav-6.10.9.0-nakliamp.wasm.mjs': '6248df5db8d7d91f30ce4b678c851fe6030747496407a2e6deabb16ad0cf6b1a',
   'vendor/libav/libav-6.10.9.0-nakliamp.loader.mjs': '272cef7c32705b2e70290cf4698350e2c888b00b789f11a97386195aa5d0b691',
   'vendor/libav/LICENSE-LGPL-2.1.txt': '20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95',
   'vendor/libav/LICENSE-LGPL-NOTICE.md': 'afb8d248e345d343a45f74a5666f850d1920fb5a0006621a5a45e570687933bf',
+  'vendor/music-metadata/music-metadata-12.5.0-write.min.mjs': '3ad39ca1d79786792a249f4adf96092c1a4dec8c7bb5cfdbde7956ebe783d747',
+  'vendor/music-metadata/LICENSES.txt': '20ecb284b32a4d5e911b4694d1c97ee0400637990f06e84edd75d77fa07d6d48',
+  'vendor/butterchurn/butterchurn-3.0.0-beta.5.min.mjs': 'b5353af542b95cb5264069a0a4f52a23174e45745b58c48e245a3557d229b640',
+  'vendor/butterchurn/presets-3.0.0-beta.4.mjs': 'a500b2b85493c37a4001033544294bdb288d0607cc591ec438562149adce4b5e',
+  'vendor/butterchurn/LICENSE-MIT.txt': 'e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98',
+  'vendor/butterchurn/LICENSE-presets-MIT.txt': 'e5c204814d7119c939d9f111691e0c2008607d09c2f4679691e6dc5a10f24b98',
 });
 
 for (const [path, digest] of Object.entries(expected)) {

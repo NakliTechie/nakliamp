@@ -29,7 +29,11 @@ try {
 
 // Nothing may be fetched. A single-file release that reaches the network is
 // not one, and it would break the no-analytics claim the README makes.
-const externalReference = /(?:src|href)\s*=\s*["'](?!#)(?:https?:)?\/\//i.exec(html);
+// The vendored NakliOS SDK is excluded from this scan: it is a canonical file
+// spliced in between markers, and its usage comment names its own CDN URL as
+// documentation. Its code fetches nothing (the host bridge is postMessage).
+const scanned = html.replace(/\/\*\s*naklios-sdk:begin[\s\S]*?naklios-sdk:end\s*\*\//, '');
+const externalReference = /(?:src|href)\s*=\s*["'](?!#)(?:https?:)?\/\//i.exec(scanned);
 assert(!externalReference, `The artifact references an external resource: ${externalReference?.[0]}`);
 assert(!/@import\s+url\(\s*["']?https?:/i.test(html), 'The artifact imports a remote stylesheet.');
 assert(!/fonts\.(googleapis|gstatic)\.com/i.test(html), 'The artifact links a remote font.');

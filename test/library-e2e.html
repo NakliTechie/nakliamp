@@ -252,24 +252,24 @@ async function run() {
     900);
   harness.pause();
 
-  // 7. Search narrows the list without losing playback — and without the
-  //    queue index drifting onto a different track. `queue` is reassigned to
-  //    the visible rows on every keystroke while the index kept pointing into
-  //    the old array, so prev/next, the now-playing marker and auto-advance
-  //    all acted on whatever happened to sit at that position.
+  // 7. Search narrows the list without losing playback, and without touching
+  //    the queue. Since v1 the queue is its own model (parity P5): a search
+  //    changes the rows on screen, never what plays next. (Before v1 the queue
+  //    was the visible rows, and this step asserted the index went to -1.)
   const playingName = harness.state().media.name;
   const search = doc.querySelector('#lib-search');
   search.value = 'Nested';
   search.dispatchEvent(new app.Event('input'));
   await waitFor(() => rows().length === 1, () => `Search matched ${rows().length} rows, expected 1.`);
   assert(harness.state().path, 'Searching stopped playback.');
-  assert(harness.queue().index === -1,
-    `The playing track is filtered out, but the queue index is ${harness.queue().index}.`);
+  const queueBefore = harness.queue();
+  assert(queueBefore.length === written.length && queueBefore.index >= 0,
+    `Searching changed the queue: ${JSON.stringify(queueBefore)}.`);
   assert(doc.querySelector('.lib-row[aria-current]') === null,
     'A row that is not the playing track is marked as playing.');
-  // The transport buttons are refreshed on the clock frame, not on the keystroke.
-  await waitFor(() => doc.querySelector('#next').disabled && doc.querySelector('#prev').disabled,
-    'Next and previous act on a queue the playing track is not in.');
+  // Next and previous still follow the queue, whatever the list shows.
+  await waitFor(() => !doc.querySelector('#next').disabled || !doc.querySelector('#prev').disabled,
+    'Next and previous were disabled by a search, but the queue still has the playing track.');
 
   search.value = '';
   search.dispatchEvent(new app.Event('input'));
@@ -316,7 +316,10 @@ async function run() {
   //     bound, so holding shift did nothing it promised. `Shift+V` stays a
   //     binding of its own.
   {
-    const press = key => doc.dispatchEvent(new app.KeyboardEvent('keydown', { key, bubbles: true }));
+    // M, P and N are sent as capital letters without Shift (Caps Lock), which the
+    // command keymap maps to the plain letter. Since v1 Shift+M is the mini player,
+    // so a real Shift+M is not pressed here.
+    const press = (key, init = {}) => doc.dispatchEvent(new app.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
     const before = harness.state().clock.muted;
     press('M');
     await waitFor(() => harness.state().clock.muted !== before, 'Shift+M did not mute.');
@@ -331,9 +334,11 @@ async function run() {
 
     // Shift+V is the full-window visualiser, not a second binding for `v`.
     const mode = harness.visualiser().mode;
-    press('V');
+    press('V', { shiftKey: true });
     assert(harness.visualiser().mode === mode, 'Shift+V changed the visualiser mode instead of going full window.');
+    await waitFor(() => doc.querySelector('#vis-wrap').classList.contains('full'), 'Shift+V did not open the full-window visualiser.');
     press('Escape');
+    await waitFor(() => !doc.querySelector('#vis-wrap').classList.contains('full'), 'Escape did not leave the full-window visualiser.');
   }
 
   // 9. A drop anywhere in the window is handled, not navigated to.

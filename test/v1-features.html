@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp v1 feature gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:860px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// v1 feature gate: every v1 row of docs/specs/nakliamp-parity-001.md that a
+// browser can check, driven through the real page in an iframe, the way
+// test/library-e2e.html drives it.
+//
+// The music folder is an OPFS directory named `nakliamp-v1-harness`, built
+// here from the committed fixtures. Tags the fixtures lack (album, track
+// numbers, ReplayGain, embedded lyrics) are written into copies: an ID3v2.4
+// tag built by hand for the MP3s (the tag writer does not take ReplayGain or
+// lyrics), the app's own tag writer for the FLAC.
+//
+// Each check runs even when an earlier one failed, so one run lists every
+// defect. The gate passes only when every check passes and the page logged no
+// console error or unhandled rejection. No timing assertions: waits are
+// generous, and only outcomes are checked.
+
+import { readTags } from '../app/library/metadata.mjs';
+import { writeTags } from '../app/tags/write.mjs';
+import { getTrack as storedTrack, getLoudness, loudnessKey } from '../app/library/store.mjs';
+import { candidatesFor } from '../app/ai/playlist.mjs';
+
+const FOLDER = 'nakliamp-v1-harness';
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const passed = [];
+const failed = [];
+const notes = {};
+const errorsAfterReload = [];
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await sleep(40);
+  }
+  throw new Error(typeof message === 'function' ? await message() : message);
+}
+
+async function check(id, fn) {
+  try {
+    await fn();
+    passed.push(id);
+  } catch (error) {
+    failed.push(`${id}: ${String(error?.message ?? error).slice(0, 600)}`);
+  }
+}
+
+// ------------------------------------------------------------- fixtures ----
+
+const enc = new TextEncoder();
+const synchsafe = n => [(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127];
+const id3Frame = (id, body) => [...enc.encode(id), ...synchsafe(body.length), 0, 0, ...body];
+const textFrame = (id, value) => id3Frame(id, [3, ...enc.encode(value)]);
+const txxx = (description, value) => id3Frame('TXXX', [3, ...enc.encode(description), 0, ...enc.encode(value)]);
+const uslt = text => id3Frame('USLT', [3, ...enc.encode('eng'), 0, ...enc.encode(text)]);
+
+/** An ID3v2.4 tag in front of the MP3 fixture's audio (its own small tag removed). */
+function taggedMp3(audio, frames) {
+  const bytes = new Uint8Array(audio);
+  let start = 0;
+  if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    start = 10 + ((bytes[6] << 21) | (bytes[7] << 14) | (bytes[8] << 7) | bytes[9]);
+  }
+  const body = frames.flat();
+  const header = [0x49, 0x44, 0x33, 4, 0, 0, ...synchsafe(body.length)];
+  return new Blob([new Uint8Array([...header, ...body]), bytes.subarray(start)], { type: 'audio/mpeg' });
+}
+
+function toneWav(seconds, frequency = 440) {
+  const rate = 44100;
+  const frames = rate * seconds;
+  const bytes = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => [...text].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) {
+    view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * frequency * 2 * Math.PI) * 9000), true);
+  }
+  return bytes;
+}
+
+async function writeFile(directory, name, data) {
+  const handle = await directory.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(data);
+  await writable.close();
+}
+
+async function fixture(name) {
+  const response = await fetch(`fixtures/${name}`);
+  assert(response.ok, `Fixture ${name} did not load (${response.status}).`);
+  return response.arrayBuffer();
+}
+
+const LRC_EMBEDDED = '[00:00.00]First line\n[00:00.50]Second line\n';
+const LRC_SIDECAR = Array.from({ length: 12 }, (_, i) => `[00:${String(i * 2).padStart(2, '0')}.00]Tone line ${i + 1}`).join('\n');
+
+async function buildFolder() {
+  const opfs = await navigator.storage.getDirectory();
+  // Delete by name: only this gate's own folder and the tag backups it causes.
+  for (const name of [FOLDER, 'nakliamp-tag-backup']) {
+    try { await opfs.removeEntry(name, { recursive: true }); } catch { /* not there */ }
+  }
+  const root = await opfs.getDirectoryHandle(FOLDER, { create: true });
+  const mp3 = await fixture('audio-mp3.mp3');
+  const flac = await fixture('audio-flac.flac');
+
+  const album = await root.getDirectoryHandle('V1 Album', { create: true });
+  const common = [textFrame('TPE1', 'Harness Artist'), textFrame('TALB', 'V1 Album'), textFrame('TCON', 'Ambient'), textFrame('TDRC', '2001')];
+  await writeFile(album, '01 Alpha.mp3', taggedMp3(mp3, [
+    textFrame('TIT2', 'Alpha'), ...common, textFrame('TRCK', '1/2'),
+    txxx('REPLAYGAIN_TRACK_GAIN', '-6.50 dB'), txxx('REPLAYGAIN_TRACK_PEAK', '0.500000'),
+    txxx('REPLAYGAIN_ALBUM_GAIN', '-7.00 dB'), txxx('REPLAYGAIN_ALBUM_PEAK', '0.500000'),
+    uslt(LRC_EMBEDDED),
+  ]));
+  await writeFile(album, '02 Beta.mp3', taggedMp3(mp3, [textFrame('TIT2', 'Beta'), ...common, textFrame('TRCK', '2/2')]));
+  const canvas = new OffscreenCanvas(16, 16);
+  const paint = canvas.getContext('2d');
+  paint.fillStyle = '#c84'; paint.fillRect(0, 0, 16, 16);
+  await writeFile(album, 'cover.jpg', await canvas.convertToBlob({ type: 'image/jpeg' }));
+
+  const other = await root.getDirectoryHandle('Other', { create: true });
+  const gamma = await writeTags(new File([flac], '03 Gamma.flac', { type: 'audio/flac' }), {
+    title: 'Gamma', artist: 'Other Artist', album: 'Other Album', genre: 'Rock', year: 1995, trackNo: 3,
+  });
+  await writeFile(other, '03 Gamma.flac', gamma);
+  await writeFile(other, 'Long Tone.wav', toneWav(40, 330));
+  await writeFile(other, 'Long Tone.lrc', LRC_SIDECAR);
+  await writeFile(other, 'Edit Me.mp3', taggedMp3(mp3, [textFrame('TIT2', 'Before Edit'), textFrame('TPE1', 'Edit Artist')]));
+  return root;
+}
+
+async function readFolderFile(root, path) {
+  const segments = path.split('/');
+  const name = segments.pop();
+  try {
+    let directory = root;
+    for (const segment of segments) directory = await directory.getDirectoryHandle(segment);
+    return await (await directory.getFileHandle(name)).getFile();
+  } catch {
+    return null;
+  }
+}
+
+// ------------------------------------------------------------------ run ----
+
+async function run() {
+  const root = await buildFolder();
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  // Errors in the page: the CDP runner installs a guard in every frame; when
+  // this page is opened by hand, install one now (boot-time errors then go
+  // unseen, which the runner covers).
+  notes.pageErrorGuard = app.__errs ? 'runner guard' : 'installed after boot';
+  if (!app.__errs) {
+    app.__errs = [];
+    const original = app.console.error.bind(app.console);
+    app.console.error = (...args) => { app.__errs.push(args.map(String).join(' ')); original(...args); };
+    app.addEventListener('error', event => app.__errs.push(`error: ${event.message}`));
+    app.addEventListener('unhandledrejection', event => app.__errs.push(`rejection: ${event.reason?.stack ?? event.reason}`));
+  }
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+  const $ = selector => doc.querySelector(selector);
+  const $$ = selector => [...doc.querySelectorAll(selector)];
+  const frameTick = () => new Promise(resolve => app.requestAnimationFrame(() => app.requestAnimationFrame(resolve)));
+  const change = (element, value) => { element.value = value; element.dispatchEvent(new app.Event('change', { bubbles: true })); };
+  const input = (element, value) => { element.value = value; element.dispatchEvent(new app.Event('input', { bubbles: true })); };
+  const key = (k, init = {}) => doc.dispatchEvent(new app.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
+  const tracks = () => harness.tracks();
+  const byTitle = title => tracks().find(track => track.title === title || track.name?.startsWith(title));
+  const idOf = title => { const track = byTitle(title); assert(track, `No track titled ${title} in the index.`); return track.id; };
+  const pos = () => harness.state().clock.positionS;
+  const closeDialogs = async () => { await harness.run('view.close'); await frameTick(); };
+  const loadQueue = async (titles, { play = false, startIndex = 0 } = {}) => {
+    await harness.run('queue.set', { ids: titles.map(idOf), startIndex, play });
+    const want = idOf(titles[startIndex]);
+    await waitFor(() => harness.playingId() === want && harness.state().media.duration > 0,
+      () => `Queue start did not load ${titles[startIndex]} (playing ${harness.playingId()}, status ${harness.state().status}).`, 20_000);
+  };
+
+  // ---- 0. scan --------------------------------------------------------------
+  await harness.adoptFolder(root);
+  await harness.openLibrary();
+  await waitFor(() => harness.libraryTracks() === 5, () => `Scan indexed ${harness.libraryTracks()} of 5 tracks.`, 30_000);
+
+  await check('scan: tags, ReplayGain, lyrics flag, folder art key', () => {
+    const alpha = byTitle('Alpha');
+    assert(alpha?.album === 'V1 Album' && alpha.trackNo === 1, `Alpha indexed as ${JSON.stringify(alpha)}.`);
+    assert(Math.abs(alpha.replayGain?.trackGainDb - -6.5) < 0.01, `Alpha ReplayGain ${JSON.stringify(alpha.replayGain)}.`);
+    assert(alpha.hasLyrics, 'Alpha has no lyrics flag.');
+    assert(alpha.dirArtKey && !alpha.artKey, `Alpha art keys: artKey ${alpha.artKey}, dirArtKey ${alpha.dirArtKey}.`);
+    assert(byTitle('Gamma')?.genre === 'Rock', 'Gamma did not keep the tags the writer gave it.');
+  });
+
+  // ---- 1. Library: browse views (L6, L8) -----------------------------------
+  $('#lib-tab-browse').click();
+  const browseRoot = await waitFor(() => $('#lib-browse .nb'), 'The Browse tab mounted nothing.');
+  const viewSelect = browseRoot.querySelector('select[aria-label="Library view"]');
+  const summary = () => browseRoot.querySelector('.nb-note').textContent;
+  const rowTitles = () => [...browseRoot.querySelectorAll('.nb-window [data-index] .nb-title')].map(node => node.textContent);
+  const rowNode = title => [...browseRoot.querySelectorAll('.nb-window [data-index]')].find(node => node.querySelector('.nb-title')?.textContent === title);
+  const setBrowse = async view => { change(viewSelect, view); await frameTick(); };
+
+  await check('L6 L8: Browse lists Albums, Artists, Genres, Years, Folders, Recently added, Most played, Favourites', async () => {
+    const labels = [...viewSelect.options].map(option => option.textContent);
+    for (const label of ['Albums', 'Artists', 'Genres', 'Years', 'Folders', 'Recently added', 'Most played', 'Favourites']) {
+      assert(labels.includes(label), `The view list lacks ${label}: ${labels.join(', ')}.`);
+    }
+    // Albums key on album artist and title, so the two untagged tracks are two groups.
+    const expect = { albums: 4, artists: 4, genres: 3, years: 3, folders: 2, recentlyAdded: 5 };
+    for (const [view, count] of Object.entries(expect)) {
+      await setBrowse(view);
+      const shown = browseRoot.querySelectorAll('.nb-window [data-index]').length;
+      assert(shown === count, `${view} shows ${shown} rows, expected ${count} (${summary()}).`);
+    }
+  });
+
+  await check('L6: drill into an album shows its tracks in order', async () => {
+    await setBrowse('albums');
+    const card = [...browseRoot.querySelectorAll('.nb-card')].find(node => node.textContent.includes('V1 Album'));
+    assert(card, 'No V1 Album card.');
+    card.click();
+    await frameTick();
+    assert(JSON.stringify(rowTitles()) === JSON.stringify(['Alpha', 'Beta']), `Drill-in shows ${JSON.stringify(rowTitles())}.`);
+    browseRoot.querySelector('.nb-crumb button').click();
+    await frameTick();
+    assert(browseRoot.querySelectorAll('.nb-card').length === 4, 'Back did not return to the album grid.');
+  });
+
+  await check('L7: sort by title, both directions, and by year', async () => {
+    await setBrowse('tracks');
+    const sortSelect = browseRoot.querySelector('select[aria-label="Sort by"]');
+    change(sortSelect, 'title');
+    await frameTick();
+    const ascending = rowTitles();
+    const sorted = [...ascending].sort((a, b) => a.localeCompare(b));
+    assert(JSON.stringify(ascending) === JSON.stringify(sorted), `Title sort gave ${JSON.stringify(ascending)}.`);
+    browseRoot.querySelector('button[aria-label^="Sort direction"]').click();
+    await frameTick();
+    assert(JSON.stringify(rowTitles()) === JSON.stringify([...sorted].reverse()), `Descending gave ${JSON.stringify(rowTitles())}.`);
+    change(sortSelect, 'year');
+    await frameTick();
+    const years = rowTitles().map(title => byTitle(title)?.year ?? null).filter(year => year !== null);
+    assert(years.length === 3, `Year sort found ${years.length} dated tracks.`);
+  });
+
+  await check('Y4: multi-select with Shift and Ctrl click', async () => {
+    await setBrowse('tracks');
+    const nodes = () => [...browseRoot.querySelectorAll('.nb-window [data-index]')];
+    nodes()[0].dispatchEvent(new app.MouseEvent('click', { bubbles: true }));
+    nodes()[2].dispatchEvent(new app.MouseEvent('click', { bubbles: true, shiftKey: true }));
+    const count = () => browseRoot.querySelector('.nb-count').textContent;
+    assert(count() === '3 selected', `Shift click selected "${count()}".`);
+    nodes()[4].dispatchEvent(new app.MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    assert(count() === '4 selected', `Ctrl click selected "${count()}".`);
+    await setBrowse('albums');
+  });
+
+  await check('L9: rating and favourite persist to the store', async () => {
+    await setBrowse('tracks');
+    const gamma = idOf('Gamma');
+    rowNode('Gamma').querySelector('[data-rate="4"]').click();
+    await waitFor(async () => (await storedTrack(gamma))?.rating === 4, async () => `Stored rating is ${(await storedTrack(gamma))?.rating}.`);
+    rowNode('Gamma').querySelector('[data-fav]').click();
+    await waitFor(async () => (await storedTrack(gamma))?.bookmarked === 1, async () => `Stored favourite is ${(await storedTrack(gamma))?.bookmarked}.`);
+    await setBrowse('favourites');
+    assert(JSON.stringify(rowTitles()) === '["Gamma"]', `Favourites shows ${JSON.stringify(rowTitles())}.`);
+    await setBrowse('rated');
+    assert(JSON.stringify(rowTitles()) === '["Gamma"]', `Rated shows ${JSON.stringify(rowTitles())}.`);
+  });
+
+  await check('P5: playing from a list sets the queue to that list', async () => {
+    await setBrowse('tracks');
+    change(browseRoot.querySelector('select[aria-label="Sort by"]'), 'title');
+    await frameTick();
+    const order = rowTitles();
+    rowNode('Long Tone').dispatchEvent(new app.MouseEvent('dblclick', { bubbles: true }));
+    await waitFor(() => harness.playingId() === idOf('Long Tone'), 'Double-clicking Long Tone did not play it.', 20_000);
+    const snap = harness.queueSnapshot();
+    const titles = snap.ids.map(id => tracks().find(track => track.id === id)?.title);
+    assert(JSON.stringify(titles) === JSON.stringify(order), `Queue is ${JSON.stringify(titles)}, list was ${JSON.stringify(order)}.`);
+    assert(snap.index === order.indexOf('Long Tone'), `Queue index ${snap.index}.`);
+    await waitFor(() => harness.state().clock.playing && pos() > 0.2, 'Long Tone did not start playing.', 20_000);
+  });
+
+  // ---- 2. Long Tone: lyrics sidecar, seek keys, Milkdrop, loudness ---------
+  await check('T7: .lrc sidecar shows, synced highlight moves', async () => {
+    $('#tab-now').click();
+    const pane = await waitFor(() => $('#lyrics-root .nk-lyr.synced'), () => `Lyrics pane: ${$('#lyrics-root').textContent.slice(0, 200)}.`, 15_000);
+    assert(pane.textContent.includes('Tone line 1'), `Lyrics pane shows ${pane.textContent.slice(0, 200)}.`);
+    const activeIndex = () => [...pane.querySelectorAll('li')].findIndex(li => li.getAttribute('aria-current') === 'true');
+    const first = activeIndex();
+    await harness.seek(5);
+    await waitFor(() => activeIndex() > first && activeIndex() >= 2,
+      () => `The highlighted line stayed at ${activeIndex()} (was ${first}) at ${pos()} s.`, 10_000);
+  });
+
+  await check('V3: Milkdrop runs or refuses by name and falls back', async () => {
+    harness.setVisualiserMode('milkdrop');
+    await sleep(2500);
+    const vis = harness.visualiser();
+    const toast = $('#toast').textContent;
+    if (vis.mode === 'milkdrop') {
+      assert(vis.running, 'Milkdrop is selected but the visualiser is not running.');
+      notes.milkdrop = 'ran';
+    } else {
+      assert(vis.mode === 'none' && /Visualiser stopped/.test(toast), `Milkdrop left mode ${vis.mode}, toast "${toast}".`);
+      notes.milkdrop = `refused: ${toast}`;
+    }
+    harness.setVisualiserMode('bars');
+  });
+
+  await check('K3: arrow keys seek 5 s, Shift+arrow 30 s', async () => {
+    harness.pause();
+    await harness.seek(2);
+    await waitFor(() => Math.abs(pos() - 2) < 0.3, `Seek to 2 s left the clock at ${pos()}.`);
+    key('ArrowRight');
+    await waitFor(() => Math.abs(pos() - 7) < 0.4, () => `ArrowRight from 2 s gave ${pos()}.`);
+    key('ArrowRight', { shiftKey: true });
+    await waitFor(() => Math.abs(pos() - 37) < 0.4, () => `Shift+ArrowRight from 7 s gave ${pos()}.`);
+    key('ArrowLeft');
+    await waitFor(() => Math.abs(pos() - 32) < 0.4, () => `ArrowLeft from 37 s gave ${pos()}.`);
+    key('ArrowLeft', { shiftKey: true });
+    await waitFor(() => Math.abs(pos() - 2) < 0.4, () => `Shift+ArrowLeft from 32 s gave ${pos()}.`);
+  });
+
+  await check('S2: loudness measured and stored for one track', async () => {
+    harness.pause();
+    const id = idOf('Long Tone');
+    const value = await harness.measureLoudness(id);
+    assert(value && Number.isFinite(value.integratedLufs) && Number.isFinite(value.gainDb), `Measured ${JSON.stringify(value)}.`);
+    const stored = await getLoudness(loudnessKey(byTitle('Long Tone')));
+    assert(stored && Math.abs(stored.integratedLufs - value.integratedLufs) < 1e-6, `Stored ${JSON.stringify(stored)}.`);
+    notes.loudness = { integratedLufs: Number(value.integratedLufs.toFixed(2)), gainDb: Number(value.gainDb.toFixed(2)) };
+  });
+
+  // ---- 3. Queue (P5, P6, Y5) ------------------------------------------------
+  const queueTitles = () => harness.queueSnapshot().ids.map(id => tracks().find(track => track.id === id)?.title);
+  await check('P5 Y5: play next, add, move, remove, undo', async () => {
+    await harness.run('queue.set', { ids: ['Alpha', 'Beta', 'Long Tone'].map(idOf), startIndex: 0, play: false });
+    await harness.run('queue.play_next', { ids: [idOf('Gamma')] });
+    assert(JSON.stringify(queueTitles()) === '["Alpha","Gamma","Beta","Long Tone"]', `After play next: ${JSON.stringify(queueTitles())}.`);
+    await harness.run('queue.add', { ids: [idOf('Edit Me')] });
+    assert(queueTitles().at(-1) === 'Before Edit', `After add: ${JSON.stringify(queueTitles())}.`);
+    await harness.run('queue.move', { from: 1, to: 3 });
+    assert(JSON.stringify(queueTitles()) === '["Alpha","Beta","Long Tone","Gamma","Before Edit"]', `After move: ${JSON.stringify(queueTitles())}.`);
+    await harness.run('queue.remove', { indices: [4] });
+    assert(queueTitles().length === 4, `After remove: ${JSON.stringify(queueTitles())}.`);
+    await harness.run('queue.undo');
+    assert(queueTitles().length === 5 && queueTitles()[4] === 'Before Edit', `After undo: ${JSON.stringify(queueTitles())}.`);
+  });
+
+  await check('P5 Y5: queue panel lists, removes and undoes', async () => {
+    $('#tab-queue').click();
+    const rows = () => $$('#queue-root [role=option][data-index]');
+    await waitFor(() => rows().length === 5, () => `The queue panel shows ${rows().length} rows.`);
+    rows()[4].querySelector('[data-remove]').click();
+    await waitFor(() => rows().length === 4 && harness.queueSnapshot().length === 4, () => `After the panel remove: ${rows().length} rows.`);
+    $('#queue-root button[aria-label="Undo the last queue edit"]').click();
+    await waitFor(() => rows().length === 5, () => `Undo left ${rows().length} rows.`);
+  });
+
+  await check('P6: shuffle tracks and albums, persisted', async () => {
+    const before = queueTitles();
+    await harness.run('queue.shuffle', { mode: 'tracks' });
+    let snap = harness.queueSnapshot();
+    assert(snap.shuffle === 'tracks' && queueTitles()[0] === 'Alpha', `Track shuffle: ${snap.shuffle}, ${JSON.stringify(queueTitles())}.`);
+    assert([...queueTitles()].sort().join() === [...before].sort().join(), 'Shuffle lost or added entries.');
+    assert(JSON.parse(app.localStorage.getItem('nakliamp:queue') ?? '{}').shuffle === 'tracks' || app.localStorage.getItem('nakliamp:queue')?.includes('tracks'),
+      'Shuffle mode is not in the stored queue.');
+    await harness.run('queue.shuffle', { mode: 'albums' });
+    snap = harness.queueSnapshot();
+    const titles = queueTitles();
+    assert(snap.shuffle === 'albums', `Album shuffle mode is ${snap.shuffle}.`);
+    assert(titles.indexOf('Beta') === titles.indexOf('Alpha') + 1, `Album shuffle split V1 Album: ${JSON.stringify(titles)}.`);
+    await harness.run('queue.shuffle', { mode: 'off' });
+    assert(JSON.stringify(queueTitles()) === JSON.stringify(before), `Shuffle off did not restore the order: ${JSON.stringify(queueTitles())}.`);
+    assert(harness.settings().shuffle === 'off', 'The shuffle setting did not follow.');
+  });
+
+  await check('P6: repeat one and all; next and previous follow the queue', async () => {
+    await harness.run('queue.repeat', { mode: 'one' });
+    assert(harness.queueSnapshot().repeat === 'one' && harness.settings().repeat === 'one', 'Repeat one is not set and saved.');
+    await harness.run('queue.repeat', { mode: 'all' });
+    await harness.run('queue.set', { ids: ['Gamma', 'Edit Me'].map(idOf), startIndex: 0, play: false });
+    await waitFor(() => harness.playingId() === idOf('Gamma'), 'The two-track queue did not load Gamma.', 20_000);
+    await harness.run('player.next');
+    await waitFor(() => harness.playingId() === idOf('Edit Me'), 'Next did not follow the queue.', 20_000);
+    await harness.run('player.next');
+    await waitFor(() => harness.playingId() === idOf('Gamma'), 'Next at the end with repeat all did not wrap.', 20_000);
+    await harness.run('player.previous');
+    await waitFor(() => harness.playingId() === idOf('Edit Me'), 'Previous at the start with repeat all did not wrap.', 20_000);
+    await harness.run('queue.repeat', { mode: 'off' });
+    harness.pause();
+  });
+
+  await check('P5 Y2: save the queue as an M3U8 and add to it', async () => {
+    await harness.run('queue.set', { ids: ['Alpha', 'Gamma'].map(idOf), startIndex: 0, play: false });
+    await harness.run('queue.save_playlist', { name: 'Harness Queue' });
+    const file = await waitFor(() => readFolderFile(root, 'Harness Queue.m3u8'), 'Harness Queue.m3u8 was not written.');
+    const text = await file.text();
+    assert(text.startsWith('#EXTM3U') && text.includes('V1 Album/01 Alpha.mp3') && text.includes('Other/03 Gamma.flac'), `Playlist text:\n${text}`);
+    await harness.run('playlist.add', { name: 'Harness Queue', ids: [idOf('Long Tone')] });
+    await waitFor(async () => (await (await readFolderFile(root, 'Harness Queue.m3u8'))?.text())?.includes('Long Tone.wav'),
+      'playlist.add did not append Long Tone.');
+  });
+
+  // ---- 4. Alpha and Beta: RG, EQ, media session, art, lyrics, gapless -------
+  await check('S1 P8 T3 T6 L10: the tagged album track', async () => {
+    await harness.run('sound.crossfade', { seconds: 0 });
+    await loadQueue(['Alpha', 'Beta']);
+    // S1: ReplayGain resolves from the tags.
+    await harness.run('sound.replaygain', { mode: 'track', preampDb: 0 });
+    await waitFor(() => Math.abs(harness.state().dsp.gainDb - -6.5) < 0.05 && harness.state().dsp.gainSource === 'track',
+      () => `Track mode gain: ${JSON.stringify(harness.state().dsp)}.`);
+    await harness.run('sound.replaygain', { mode: 'album' });
+    await waitFor(() => Math.abs(harness.state().dsp.gainDb - -7) < 0.05 && harness.state().dsp.gainSource === 'album',
+      () => `Album mode gain: ${JSON.stringify(harness.state().dsp)}.`);
+    await harness.run('sound.replaygain', { mode: 'auto' });
+    // P8: Media Session.
+    const session = app.navigator.mediaSession;
+    await waitFor(() => session.metadata?.title === 'Alpha' && session.metadata.artist === 'Harness Artist',
+      () => `Media Session metadata: ${session.metadata?.title} / ${session.metadata?.artist}.`);
+    const actions = harness.mediaSessionActions();
+    for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto']) {
+      assert(actions.includes(action), `Media Session lacks ${action}: ${actions.join(', ')}.`);
+    }
+    // T3: folder art for a track without embedded art.
+    await waitFor(() => !$('#art-img').hidden && $('#art-img').src.startsWith('blob:'), 'The folder cover is not shown for Alpha.');
+    await waitFor(() => (session.metadata?.artwork?.length ?? 0) > 0, 'Media Session has no artwork.');
+    // T6: embedded lyrics.
+    $('#tab-now').click();
+    await waitFor(() => $('#lyrics-root').textContent.includes('First line') && $('#lyrics-root').textContent.includes('Second line'),
+      () => `Embedded lyrics not shown: ${$('#lyrics-root').textContent.slice(0, 200)}.`);
+    // L10: inspector.
+    $('#now-inspect').click();
+    const panel = await waitFor(() => doc.querySelector('.nk-insp section'), 'The inspector did not open.');
+    await waitFor(() => /Playing now/.test(doc.querySelector('.nk-insp').textContent), 'The inspector has no playing-now section.');
+    const text = doc.querySelector('.nk-insp').textContent;
+    for (const needle of ['Alpha', 'V1 Album', 'Harness Artist', 'Rung', 'Sound chain', 'Track gain', '\u22126.5 dB']) {
+      assert(text.includes(needle), `The inspector lacks "${needle}": ${text.slice(0, 400)}.`);
+    }
+    assert(panel, 'no panel');
+    await closeDialogs();
+  });
+
+  await check('S3: EQ on and a preset through the Sound panel change the engine', async () => {
+    $('#open-sound').click();
+    const sound = await waitFor(() => doc.querySelector('.nk-sound'), 'The Sound panel did not open.');
+    const toggle = sound.querySelector('input[type=checkbox]');
+    if (!toggle.checked) toggle.click();
+    await waitFor(() => harness.state().dsp.eq.enabled && harness.settings().eq.enabled, () => `EQ state: ${JSON.stringify(harness.state().dsp.eq)}.`);
+    const preset = [...sound.querySelectorAll('select')].find(select => [...select.options].some(option => option.value === 'rock'));
+    assert(preset, 'No preset select in the Sound panel.');
+    change(preset, 'rock');
+    await waitFor(() => harness.state().dsp.eq.preset === 'rock', () => `Preset is ${harness.state().dsp.eq.preset}.`);
+    assert(harness.state().dsp.chain === 'on', `The chain is ${harness.state().dsp.chain}.`);
+    await closeDialogs();
+    await harness.run('eq.enable', { enabled: false });
+  });
+
+  await check('P7: gapless lane joins two tracks of one album without a reload', async () => {
+    assert(harness.settings().gapless === 'albums', `Gapless setting is ${harness.settings().gapless}.`);
+    if (harness.playingId() !== idOf('Alpha')) await loadQueue(['Alpha', 'Beta']);
+    await harness.seek(0);
+    // Paused, the lane holds Beta as 'queued'; it schedules the join once playing.
+    await waitFor(() => ['queued', 'gapless'].includes(harness.state().dsp.next),
+      () => `Beta was not handed to the lane: ${JSON.stringify(harness.state().dsp)} (path ${harness.state().path}).`, 15_000);
+    const loads = harness.loads();
+    const advances = harness.trackAdvances();
+    await harness.play();
+    await waitFor(() => harness.trackAdvances() > advances && harness.playingId() === idOf('Beta'),
+      () => `No track-advanced into Beta (advances ${harness.trackAdvances()}, playing ${harness.playingId()}, dsp ${JSON.stringify(harness.state().dsp)}).`, 15_000);
+    assert(harness.lastAdvance()?.join === 'gapless', `The join was ${JSON.stringify(harness.lastAdvance())}.`);
+    assert(harness.loads() === loads, `The UI loaded ${harness.loads() - loads} time(s) during the gapless join.`);
+    assert(harness.queueSnapshot().index === 1, `The queue index is ${harness.queueSnapshot().index} after the join.`);
+    harness.pause();
+  });
+
+  await check('S4: crossfade setting schedules a crossfade between different albums', async () => {
+    const out = await harness.run('sound.crossfade', { seconds: 4 });
+    assert(out.crossfadeS === 4, `crossfade returned ${JSON.stringify(out)}.`);
+    await loadQueue(['Gamma', 'Long Tone']);
+    await waitFor(() => harness.state().dsp.settings.crossfadeS === 4 && ['queued', 'crossfade'].includes(harness.state().dsp.next),
+      () => `Long Tone was not handed to the lane: ${JSON.stringify(harness.state().dsp)}.`, 15_000);
+    const advances = harness.trackAdvances();
+    await harness.play();
+    await waitFor(() => harness.trackAdvances() > advances && harness.playingId() === idOf('Long Tone'),
+      () => `No track-advanced into Long Tone (dsp ${JSON.stringify(harness.state().dsp)}).`, 15_000);
+    assert(harness.lastAdvance()?.join === 'crossfade', `The join was ${JSON.stringify(harness.lastAdvance())}.`);
+    await harness.run('sound.crossfade', { seconds: 0 });
+    harness.pause();
+  });
+
+  // ---- 5. Smart playlists, destructive staging, tags -------------------------
+  await check('Y3: smart playlist with a live count, saved and listed', async () => {
+    harness.openView('smart');
+    const form = await waitFor(() => doc.querySelector('form.ns'), 'The smart editor did not open.');
+    input(form.querySelector('input[type=text]'), 'Ambient picks');
+    const value = form.querySelector('.ns-rule input');
+    input(value, 'Ambient');
+    await waitFor(() => form.querySelector('.ns-count[role=status]').textContent.startsWith('2 tracks match'),
+      () => `Live count: "${form.querySelector('.ns-count[role=status]').textContent}" ${form.querySelector('.ns-error').textContent}.`);
+    form.querySelector('button[type=submit]').click();
+    await waitFor(() => readFolderFile(root, 'Ambient picks.nakliamp-smart.json'), 'The smart playlist file was not written.');
+    await waitFor(async () => (await harness.run('smart.list')).smart.some(row => row.name === 'Ambient picks' && row.tracks === 2),
+      async () => `smart.list: ${JSON.stringify(await harness.run('smart.list'))}.`, 20_000);
+    $('#tab-library').click();
+    await waitFor(() => harness.view() === 'library', 'Library did not open.');
+    $('#lib-tab-browse').click();
+    await setBrowse('playlists');
+    await waitFor(() => rowTitles().includes('Ambient picks'), () => `Playlists view shows ${JSON.stringify(rowTitles())}.`);
+  });
+
+  await check('N3: a destructive command stages a confirm and does nothing on cancel', async () => {
+    const pending = harness.runAsPerson('playlist.delete', { name: 'Harness Queue' }).then(() => 'ran', error => error.code ?? error.message);
+    const confirm = await waitFor(() => doc.querySelector('.nk-confirm')?.closest('.nk-dlg'), 'No confirm dialog for playlist.delete.');
+    [...confirm.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click();
+    const outcome = await pending;
+    assert(outcome === 'declined', `Cancel gave ${outcome}.`);
+    assert(await readFolderFile(root, 'Harness Queue.m3u8'), 'The playlist file is gone after Cancel.');
+  });
+
+  await check('T4: tag edit through the confirm writes the file and removes the backup', async () => {
+    const id = idOf('Before Edit');
+    const pending = harness.runAsPerson('track.edit_tags', { ids: [id], patch: { title: 'Edited Title' } });
+    const confirm = await waitFor(() => doc.querySelector('.nk-confirm')?.closest('.nk-dlg'), 'No confirm dialog for track.edit_tags.', 20_000);
+    [...confirm.querySelectorAll('button')].find(button => button.textContent === 'Write tags').click();
+    const outcome = await pending;
+    assert(outcome.results?.[0]?.status === 'written', `Tag write result: ${JSON.stringify(outcome)}.`);
+    const file = await readFolderFile(root, 'Other/Edit Me.mp3');
+    const tags = await readTags(file);
+    assert(tags.title === 'Edited Title' && tags.artist === 'Edit Artist', `Re-read tags: ${tags.title} / ${tags.artist}.`);
+    const opfs = await navigator.storage.getDirectory();
+    let backups = [];
+    try {
+      const dir = await opfs.getDirectoryHandle('nakliamp-tag-backup');
+      for await (const [name] of dir.entries()) backups.push(name);
+    } catch { backups = []; }
+    assert(backups.length === 0, `Backups left: ${backups.join(', ')}.`);
+    await waitFor(() => byTitle('Edited Title'), 'The index did not pick up the new title.', 20_000);
+  });
+
+  // ---- 6. AI playlists (Q1) -------------------------------------------------
+  await check('Q1: without a host model the dialog uses the filter and says so', async () => {
+    $('#open-ai').click();
+    const dialog = await waitFor(() => doc.querySelector('.nk-ai'), 'The AI dialog did not open.');
+    input(dialog.querySelector('textarea'), 'ambient');
+    [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Generate').click();
+    await waitFor(() => dialog.querySelectorAll('ol li').length > 0, () => `No preview rows: ${dialog.querySelector('.status[role=status]').textContent}.`);
+    const status = dialog.querySelector('.status[role=status]').textContent;
+    assert(/No model here: matched by tags and search/.test(status), `Status: "${status}".`);
+    await closeDialogs();
+  });
+
+  await check('Q1: with a stubbed host model only candidate ids come back', async () => {
+    const original = app.naklios;
+    const bodies = [];
+    app.naklios = {
+      capabilities: { hosted: true, ai: true },
+      ai: { chat: { completions: { create: async body => {
+        bodies.push(body);
+        return { choices: [{ message: { content: 'Here you go: {"ids":[1,2,3,999],"title":"Harness picks"}' } }] };
+      } } } },
+    };
+    try {
+      const out = await harness.run('ai.playlist', { description: 'ambient', length: 3 });
+      const candidates = new Set(candidatesFor('ambient', tracks()).candidates.map(candidate => candidate.trackId));
+      assert(out.path === 'model', `Path ${out.path} (${out.error}).`);
+      assert(out.ids.length === 3 && out.ids.every(id => candidates.has(id)), `ids ${JSON.stringify(out.ids)} are not all candidates.`);
+      assert(bodies.length === 1, `The model was called ${bodies.length} times.`);
+      const sent = JSON.stringify(bodies[0]);
+      assert(!/\.mp3|\.flac|\.wav|V1 Album\//.test(sent), 'The request to the model carries file paths.');
+    } finally {
+      app.naklios = original;
+    }
+  });
+
+  // ---- 7. Commands (N1 to N3) and keys (K2) ---------------------------------
+  await check('N1: every command in commands.json is bound', async () => {
+    const manifest = await (await fetch('../commands.json')).json();
+    const names = manifest.commands.map(command => command.name);
+    const bound = new Set(harness.boundCommands());
+    const missing = names.filter(name => !bound.has(name));
+    assert(!missing.length, `Unbound: ${missing.join(', ')}.`);
+    notes.commands = names.length;
+  });
+
+  await check('N2: read commands answer, page by 20 and carry no paths', async () => {
+    const id = idOf('Alpha');
+    const reads = [
+      ['player.status', {}], ['queue.read', {}], ['library.search', { query: 'Alpha' }],
+      ['library.browse', { by: 'albums' }], ['library.browse', { by: 'folders' }], ['track.read', { id }],
+      ['playlist.list', {}], ['smart.list', {}], ['view.open', { view: 'queue' }], ['view.close', {}],
+    ];
+    for (const [name, args] of reads) {
+      let out;
+      try { out = await harness.run(name, args); } catch (error) { throw new Error(`${name} failed: ${error.message}`); }
+      const text = JSON.stringify(out);
+      assert(!/\.mp3|\.flac|\.wav|\.m3u8|V1 Album\//.test(text), `${name} returned a path: ${text.slice(0, 300)}.`);
+    }
+    const search = await harness.run('library.search', { query: 'e', limit: 2 });
+    assert(Array.isArray(search.items) && search.limit === 2 && search.items.length <= 2 && Number.isInteger(search.total),
+      `library.search page: ${JSON.stringify(search).slice(0, 200)}.`);
+    const first = await harness.run('library.search', { query: 'Alpha' });
+    assert(first.limit === 20 && first.items[0]?.id === id, `library.search default page: ${JSON.stringify(first).slice(0, 200)}.`);
+  });
+
+  await check('N3: host command list is built with approval classes', async () => {
+    const list = harness.hostCommands();
+    assert(list.length === harness.commands().length, `Host list has ${list.length} of ${harness.commands().length}.`);
+    assert(list.every(entry => entry.handler === 'function'), 'A host entry has no handler.');
+    const scopes = Object.fromEntries(list.map(entry => [entry.name, entry.scope]));
+    assert(scopes['track.edit_tags'] === 'destructive' && scopes['playlist.delete'] === 'destructive', `Destructive scopes: ${scopes['track.edit_tags']}, ${scopes['playlist.delete']}.`);
+    assert(scopes['player.status'] === 'read', `player.status scope ${scopes['player.status']}.`);
+  });
+
+  await check('K2: ? opens the keymap with rows', async () => {
+    doc.body.focus();
+    key('?');
+    await waitFor(() => harness.dialogName() === 'keymap', `? opened ${harness.dialogName()}.`);
+    const rows = doc.querySelectorAll('.nk-keys dd').length;
+    assert(rows >= 15, `The keymap has ${rows} rows.`);
+    doc.querySelector('.nk-dlg').dispatchEvent(new app.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await waitFor(() => harness.dialogName() === null, 'Escape did not close the keymap.');
+  });
+
+  // ---- 8. Theme, mini player ------------------------------------------------
+  await check('V4: light and dark themes, and the host theme on system', async () => {
+    const root = doc.documentElement;
+    const background = () => app.getComputedStyle(doc.body).backgroundColor;
+    await harness.run('ui.theme', { theme: 'light' });
+    await frameTick();
+    const light = background();
+    assert(root.dataset.theme === 'light', `data-theme is ${root.dataset.theme}.`);
+    await harness.run('ui.theme', { theme: 'dark' });
+    await frameTick();
+    assert(root.dataset.theme === 'dark', `data-theme is ${root.dataset.theme}.`);
+    const dark = background();
+    assert(light !== dark, `Both themes paint ${light}.`);
+    notes.theme = { light, dark };
+    // 'system' follows the NakliOS host theme. This page is the parent frame on
+    // an approved origin (127.0.0.1), so it can send the host's theme message.
+    await harness.run('ui.theme', { theme: 'system' });
+    const hostTheme = (mood, body) => app.postMessage({ type: 'naklios:theme', theme: 'harness', mood,
+      colors: { BODY: body, PANEL: body, INK: mood === 'dark' ? '#eeeeee' : '#111111', ROW: '#888888', ACT: '#3388aa' } }, '*');
+    hostTheme('dark', '#102030');
+    await waitFor(() => root.dataset.theme === 'dark' && background() === 'rgb(16, 32, 48)',
+      () => `Host dark theme: data-theme ${root.dataset.theme}, background ${background()}.`);
+    hostTheme('light', '#fafaf0');
+    await waitFor(() => root.dataset.theme === 'light' && background() === 'rgb(250, 250, 240)',
+      () => `Host light theme: data-theme ${root.dataset.theme}, background ${background()}.`);
+    await harness.run('ui.theme', { theme: 'light' });
+    await waitFor(() => background() === light, () => `Back on light the background is ${background()}.`);
+  });
+
+  await check('V6: mini player toggles', async () => {
+    $('#mini-toggle').click();
+    await waitFor(() => doc.documentElement.classList.contains('mini') && $('#mini-toggle').getAttribute('aria-pressed') === 'true', 'Mini did not turn on.');
+    $('#mini-exit').click();
+    await waitFor(() => !doc.documentElement.classList.contains('mini'), 'Mini did not turn off.');
+  });
+
+  // ---- 9. Accessibility and narrow layout (K4, K5) --------------------------
+  function labelledByName(element) {
+    const labelled = element.getAttribute('aria-labelledby');
+    if (!labelled) return '';
+    return labelled.split(/\s+/).map(id => doc.getElementById(id)?.textContent ?? '').join(' ').trim();
+  }
+  function labelName(element) {
+    if (!element.labels?.length) return '';
+    return [...element.labels].map(label => label.textContent).join(' ').trim();
+  }
+  function contentName(element) {
+    if (element.tagName === 'BUTTON' && element.textContent.trim()) return element.textContent.trim();
+    if (element.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes(element.type) && element.value) return element.value;
+    return element.getAttribute('title')?.trim() || '';
+  }
+  function accessibleName(element) {
+    return labelledByName(element)
+      || element.getAttribute('aria-label')?.trim()
+      || labelName(element)
+      || contentName(element);
+  }
+  const unnamed = () => $$('button, input, select, textarea')
+    .filter(element => element.type !== 'hidden' && !accessibleName(element))
+    .map(element => element.outerHTML.slice(0, 120));
+
+  await check('K4: every control in every view and dialog has an accessible name', async () => {
+    const offenders = new Set();
+    const collect = where => unnamed().forEach(html => offenders.add(`${where}: ${html}`));
+    for (const view of ['library', 'queue', 'now']) {
+      if (view === 'library') { $('#tab-library').click(); await waitFor(() => harness.view() === 'library', 'no library'); }
+      else $(`#tab-${view}`).click();
+      await frameTick();
+      collect(view);
+    }
+    $('#tab-library').click();
+    $('#lib-tab-browse').click();
+    for (const view of ['albums', 'tracks', 'playlists']) { await setBrowse(view); collect(`browse ${view}`); }
+    const more = browseRoot.querySelector('.nb-more');
+    if (more) { more.click(); await frameTick(); collect('browse menu'); doc.body.dispatchEvent(new app.PointerEvent('pointerdown', { bubbles: true })); }
+    for (const view of ['sound', 'inspector', 'tags', 'smart', 'ai', 'keymap']) {
+      harness.openView(view, view === 'tags' || view === 'inspector' ? [idOf('Alpha')] : undefined);
+      await waitFor(() => harness.dialogName() === view, `${view} did not open.`);
+      await sleep(150);
+      collect(view);
+      await closeDialogs();
+    }
+    assert(!offenders.size, `Unnamed controls:\n${[...offenders].join('\n')}`);
+  });
+
+  await check('K5: at 360 px Library, Queue and Now have no horizontal scroll', async () => {
+    frame.style.width = '360px';
+    try {
+      const wide = [];
+      const measure = async where => {
+        await frameTick();
+        await sleep(100);
+        const { scrollWidth, clientWidth } = doc.documentElement;
+        if (scrollWidth > clientWidth) {
+          const culprits = $$('body *').filter(element => element.getBoundingClientRect().right > clientWidth + 0.5 && element.getClientRects().length)
+            .slice(0, 5).map(element => `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}.${[...element.classList].join('.')}`);
+          wide.push(`${where}: ${scrollWidth} > ${clientWidth} (${culprits.join(', ')})`);
+        }
+      };
+      $('#tab-library').click();
+      await waitFor(() => harness.view() === 'library', 'no library');
+      $('#lib-tab-tracks').click(); await measure('library tracks');
+      $('#lib-tab-browse').click();
+      for (const view of ['albums', 'tracks']) { await setBrowse(view); await measure(`library browse ${view}`); }
+      $('#tab-queue').click(); await measure('queue');
+      $('#tab-now').click(); await measure('now');
+      assert(!wide.length, wide.join('\n'));
+    } finally {
+      frame.style.width = '1280px';
+    }
+  });
+
+  await check('L8: Most played lists what was played', async () => {
+    $('#tab-library').click();
+    await waitFor(() => harness.view() === 'library', 'no library');
+    $('#lib-tab-browse').click();
+    await setBrowse('mostPlayed');
+    await waitFor(() => rowTitles().length > 0, 'Most played is empty after playing tracks.');
+  });
+
+  await check('Y2: Add to playlist from the context menu', async () => {
+    await setBrowse('tracks');
+    rowNode('Beta').dispatchEvent(new app.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+    const menu = await waitFor(() => { const node = browseRoot.querySelector('.nb-menu'); return node && !node.hidden && node; }, 'No context menu.');
+    [...menu.querySelectorAll('[role=menuitem]')].find(item => item.textContent.startsWith('Add to playlist')).click();
+    const target = await waitFor(() => [...menu.querySelectorAll('[role=menuitem]')].find(item => item.textContent === 'Harness Queue'), 'Harness Queue is not offered.');
+    target.click();
+    await waitFor(async () => (await (await readFolderFile(root, 'Harness Queue.m3u8'))?.text())?.includes('02 Beta.mp3'),
+      'The context menu did not add Beta to Harness Queue.', 20_000);
+  });
+
+  await check('K4: browse list moves by arrow keys and Enter plays', async () => {
+    await setBrowse('tracks');
+    const scroller = browseRoot.querySelector('.nb-scroll');
+    scroller.focus();
+    const press = k => scroller.dispatchEvent(new app.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    press('Home');
+    press('ArrowDown');
+    await frameTick();
+    const active = scroller.getAttribute('aria-activedescendant');
+    const node = active && doc.getElementById(active);
+    assert(node?.dataset.index === '1', `ArrowDown put the cursor on ${node?.dataset.index}.`);
+    const title = node.querySelector('.nb-title').textContent;
+    press('Enter');
+    await waitFor(() => tracks().find(track => track.id === harness.playingId())?.title === title,
+      () => `Enter did not play ${title}.`, 20_000);
+    harness.pause();
+  });
+
+  await check('L9: favourite from Now playing', async () => {
+    const id = harness.playingId();
+    const before = (await storedTrack(id))?.bookmarked ?? 0;
+    $('#now-fav').click();
+    await waitFor(async () => ((await storedTrack(id))?.bookmarked ?? 0) !== before && $('#now-fav').getAttribute('aria-pressed') === String(!before),
+      'The Now playing favourite did not toggle the store and the button.');
+  });
+
+  await check('P6: shuffle and repeat survive a reload', async () => {
+    await harness.run('queue.shuffle', { mode: 'albums' });
+    await harness.run('queue.repeat', { mode: 'all' });
+    const length = harness.queueSnapshot().length;
+    const reloaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
+    app.location.reload();
+    await reloaded;
+    const next = await waitFor(() => frame.contentWindow.__nakliampHarness, 'No harness after reload.');
+    await waitFor(() => next.libraryTracks() === 5, 'The index did not come back after reload.');
+    const snap = next.queueSnapshot();
+    assert(snap.shuffle === 'albums' && snap.repeat === 'all' && snap.length === length, `After reload: ${JSON.stringify({ shuffle: snap.shuffle, repeat: snap.repeat, length: snap.length })}.`);
+    const settings = next.settings();
+    assert(settings.shuffle === 'albums' && settings.repeat === 'all', `Settings after reload: ${settings.shuffle}, ${settings.repeat}.`);
+    errorsAfterReload.push(...(frame.contentWindow.__errs ?? []));
+  });
+
+  try { harness.pause(); } catch { /* page reloaded */ }
+  const errors = [...(app.__errs ?? []), ...errorsAfterReload, ...(window.__errs ?? [])];
+  return { errors };
+}
+
+run().then(({ errors }) => {
+  const ok = !failed.length && !errors.length;
+  result.dataset.status = ok ? 'pass' : 'fail';
+  result.textContent = JSON.stringify({ checks: passed.length + failed.length, passed: passed.length, failed, errors, notes }, null, 2);
+  document.title = `${ok ? 'PASS' : 'FAIL'} — NakliAmp v1 feature gate`;
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = JSON.stringify({ aborted: error.stack || String(error), passed: passed.length, failed, notes }, null, 2);
+  document.title = 'FAIL — NakliAmp v1 feature gate';
+});
+</script>
+</body>
+</html>

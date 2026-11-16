@@ -3,10 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const [configSource, headers, assetsIgnore, index, vendor, readme] = await Promise.all([
-  readFile(resolve(root, 'wrangler.jsonc'), 'utf8'),
-  readFile(resolve(root, '_headers'), 'utf8'),
-  readFile(resolve(root, '.assetsignore'), 'utf8'),
+const [index, vendor, readme] = await Promise.all([
   readFile(resolve(root, 'index.html'), 'utf8'),
   readFile(resolve(root, 'VENDOR.md'), 'utf8'),
   readFile(resolve(root, 'README.md'), 'utf8'),
@@ -15,18 +12,6 @@ const [configSource, headers, assetsIgnore, index, vendor, readme] = await Promi
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
-
-const config = JSON.parse(configSource);
-assert(config.name === 'nakliamp', `Unexpected Worker name: ${config.name}`);
-assert(config.compatibility_date === '2026-07-21', 'Unexpected compatibility date.');
-assert(config.workers_dev === false, 'The workers.dev route must stay disabled.');
-assert(config.assets?.directory === './', 'The static asset directory must be the repository root.');
-assert(
-  config.routes?.length === 1
-    && config.routes[0]?.pattern === 'nakliamp.naklitechie.com'
-    && config.routes[0]?.custom_domain === true,
-  'The standalone Custom Domain route is missing or unexpected.',
-);
 
 // The allowlist is derived from what index.html actually imports, not written
 // by hand. It went stale once: four modules the app had started importing were
@@ -65,44 +50,30 @@ assert(inlineScript, 'index.html has no inline module script.');
 const modules = await reachableModules(inlineScript);
 assert(modules.length >= 10, `Only ${modules.length} modules reachable; the graph walk is wrong.`);
 
-const assetRules = assetsIgnore.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-assert(assetRules[0] === '*', 'The asset policy must begin by excluding every path.');
-const allowed = new Set(assetRules.slice(1).map(rule => rule.replace(/^!/, '')));
-
-// Every module the app imports must be published, or the hosted build breaks.
+// NakliAmp ships only as the NakliOS mirror (naklios.dev/apps/nakliamp/), which
+// copies the files listed for it in NakliOS's apps/manifest.json. Every module
+// the page imports must exist here, and must be in that list, or the mirror
+// 404s on it. The manifest lives in another repository, so a missing entry is
+// reported for the mirror owner rather than failing this gate.
+const { access } = await import('node:fs/promises');
 for (const module of modules) {
-  assert(allowed.has(module), `${module} is imported but not in .assetsignore.`);
+  await access(resolve(root, module)).catch(() => { throw new Error(`${module} is imported but missing.`); });
 }
-// And every directory on the way to it, since the allowlist is path-prefixed.
-for (const module of modules) {
-  const parts = module.split('/');
-  for (let depth = 1; depth < parts.length; depth += 1) {
-    const directory = `${parts.slice(0, depth).join('/')}/`;
-    assert(allowed.has(directory), `${directory} is on a published path but not in .assetsignore.`);
+const shipped = ['index.html', 'VENDOR.md', 'commands.json', 'sw.js', ...modules];
+const mirrorManifest = resolve(root, '../naklios-universe/naklios/apps/manifest.json');
+try {
+  const manifest = JSON.parse(await readFile(mirrorManifest, 'utf8'));
+  const entry = manifest.apps.find(app => app.id === 'nakliamp');
+  const listed = new Set((entry?.files ?? []).map(file => file.source));
+  const missing = [];
+  for (const file of shipped) {
+    if (listed.has(file)) continue;
+    try { await access(resolve(root, file)); missing.push(file); } catch { /* not a file here */ }
   }
+  if (missing.length) console.log(`NOTE — NakliOS mirror manifest lacks ${missing.length} file(s): ${missing.join(', ')}`);
+} catch {
+  console.log('NOTE — NakliOS mirror manifest not readable here; mirror file list not compared.');
 }
-// Nothing may be published that the app does not need.
-const required = new Set([
-  'index.html', 'VENDOR.md', 'vendor/mediabunny/LICENSE-MPL-2.0.txt',
-  ...modules,
-  ...modules.flatMap(module => module.split('/').slice(0, -1)
-    .map((_, depth, parts) => `${parts.slice(0, depth + 1).join('/')}/`)),
-]);
-for (const rule of allowed) {
-  assert(required.has(rule), `${rule} is published but nothing imports it.`);
-}
-
-assert(!assetRules.includes('!_headers'), 'The _headers control file must not be published.');
-assert(!assetRules.includes('!wrangler.jsonc'), 'The Wrangler configuration must not be published.');
-
-const framePolicy = headers.match(/^\s*Content-Security-Policy:\s*(.+)$/m)?.[1];
-assert(
-  framePolicy === "frame-ancestors 'self' https://naklios.dev https://naklios.com",
-  `Unexpected frame-ancestor policy: ${framePolicy}`,
-);
-assert(!framePolicy.includes('*'), 'The frame-ancestor allowlist contains a wildcard.');
-assert(/^\s*Referrer-Policy:\s*no-referrer$/m.test(headers), 'The referrer policy is missing.');
-assert(/^\s*X-Content-Type-Options:\s*nosniff$/m.test(headers), 'The MIME-sniffing defense is missing.');
 
 const pagePolicy = index.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
 assert(pagePolicy, 'The in-document Content-Security-Policy is missing.');
@@ -125,12 +96,7 @@ assert(
   /The committed release gate is Chromium-only\./.test(readme),
   'The cross-browser release limitation is missing.',
 );
-assert(
-  /https:\/\/nakliamp\.naklitechie\.com\//.test(readme),
-  'The standalone publication URL is missing.',
-);
-
 console.log(
-  `PASS — Delivery policy: ${modules.length} modules reachable, all published; `
+  `PASS — Delivery policy: ${modules.length} modules reachable, all present; `
   + 'strict CSP; source notice; Chromium-only gate',
 );

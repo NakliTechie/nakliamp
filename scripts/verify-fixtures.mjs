@@ -33,6 +33,6 @@ const r3 = manifest.fixtures.filter(item => item.role === 'audio-r3').length;
 if (r3 !== 3) throw new Error('The gate requires three R3 software-decode fixtures.');
 // Formats only the wasm tier can decode; the lean build must still refuse them.
 const wasm = manifest.fixtures.filter(item => item.role === 'audio-wasm').length;
-if (wasm !== 6) throw new Error('The gate requires six wasm-decode fixtures.');
+if (wasm !== 7) throw new Error('The gate requires seven wasm-decode fixtures.');
 
 console.log(`PASS — Golden audio: ${manifest.fixtures.length} files; 7 positives; 1 WMA refusal; ${r3} R3; ${wasm} wasm`);

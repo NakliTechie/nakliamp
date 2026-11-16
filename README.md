@@ -103,7 +103,7 @@ screen that destroys your library and stops the music.
 | Key | Action |
 |---|---|
 | Space | Play or pause |
-| Left / Right | Seek backward or forward 10 seconds |
+| Left / Right | Seek backward or forward 5 seconds (Shift: 30) |
 | Up / Down | Raise or lower volume |
 | M | Mute or unmute |
 | N / P | Next or previous track |
@@ -111,6 +111,7 @@ screen that destroys your library and stops the music.
 | v | Cycle visualiser mode |
 | Shift+V | Full-window visualiser |
 | Esc | Leave the full-window visualiser |
+| ? | Show every shortcut |
 
 ## Part of naklios
 
@@ -193,8 +194,15 @@ committed fixtures and fail on any console error or network request. A green
 tick from a runner that cannot open an audio context would mean less than
 nothing.
 
-## Not built yet
+## Since the v1 parity build (2026-11-16)
 
-Stated plainly rather than implied by omission: gapless playback, the
-equaliser, Media Session integration, the compact/full duality, and a
-keyboard-map overlay. Nothing on that list is refused — none of it is built.
+Built and checked in Chrome: a play queue with shuffle and repeat, gapless
+playback between tracks of one album, crossfade, ReplayGain from tags and from
+an on-device loudness scan, a 10-band equaliser, Media Session (media keys and
+the system now-playing panel), browse views by album, artist, genre, year and
+folder, ratings and favourites, smart playlists, tag editing written back to
+the file (Chromium), lyrics (embedded and `.lrc`), folder art, a Milkdrop
+visualiser, light and dark themes, a mini player, a keyboard-map overlay (`?`),
+AI playlists from a description through the NakliOS model, and a command list
+(`commands.json`) that NakliOS and agents can call. The full matrix and how each
+row was checked: `docs/specs/nakliamp-parity-001.md`.

@@ -82,7 +82,7 @@ const be16 = value => [(value >>> 8) & 0xff, value & 0xff];
 
 /** The 80-bit extended float AIFF stores its sample rate in. */
 function extended80(rate) {
-  if (rate === 0) return new Array(10).fill(0);
+  if (rate === 0) return Array.from({ length: 10 }).fill(0);
   let exponent = 16383;
   let mantissa = rate;
   while (mantissa < 0x80000000) { mantissa *= 2; exponent -= 1; }
@@ -93,7 +93,7 @@ function extended80(rate) {
 /** An AIFF whose COMM chunk declares whatever channel count is asked for. */
 function aiffWithChannels(channels, { bits = 16, rate = 48000, frames = 8 } = {}) {
   const comm = [...be16(channels), ...be32(frames), ...be16(bits), ...extended80(rate)];
-  const ssnd = [...be32(0), ...be32(0), ...new Array(16).fill(0)];
+  const ssnd = [...be32(0), ...be32(0), ...Array.from({ length: 16 }).fill(0)];
   const body = [
     ...ascii('AIFF'),
     ...ascii('COMM'), ...be32(comm.length), ...comm,
@@ -110,7 +110,7 @@ function caf({ channels = 1, bits = 16, rate = 48000, sizeHigh = 0, sizeLow = 32
     ...rateBytes, ...ascii('lpcm'), ...be32(0),
     ...be32(4), ...be32(1), ...be32(channels), ...be32(bits),
   ];
-  const data = [...be32(0), ...new Array(16).fill(0)];
+  const data = [...be32(0), ...Array.from({ length: 16 }).fill(0)];
   return new Uint8Array([
     ...ascii('caff'), ...be16(1), ...be16(0),
     ...ascii('desc'), ...be32(sizeHigh), ...be32(sizeLow), ...desc,
@@ -123,7 +123,7 @@ function au({ channels = 1, encoding = 3, rate = 48000, dataOffset = 24, length 
   return new Uint8Array([
     ...ascii('.snd'), ...be32(dataOffset), ...be32(length),
     ...be32(encoding), ...be32(rate), ...be32(channels),
-    ...new Array(payload).fill(0),
+    ...Array.from({ length: payload }).fill(0),
   ]);
 }
 

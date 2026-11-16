@@ -40,6 +40,14 @@ async function peakEnergy(engine, timeoutMs = 3000) {
   return peak;
 }
 
+/** Raise each channel's running peak to the loudest bin it shows now. */
+function samplePeaks(taps, bins, peaks) {
+  for (const [index, node] of taps.entries()) {
+    node.getByteFrequencyData(bins[index]);
+    peaks[index] = Math.max(peaks[index], ...bins[index]);
+  }
+}
+
 async function run() {
   const report = {};
 
@@ -121,10 +129,7 @@ async function run() {
     const peaks = [0, 0];
     const deadline = performance.now() + 2500;
     while (performance.now() < deadline && peaks[0] <= 8) {
-      for (const [index, node] of taps.entries()) {
-        node.getByteFrequencyData(bins[index]);
-        for (const value of bins[index]) if (value > peaks[index]) peaks[index] = value;
-      }
+      samplePeaks(taps, bins, peaks);
       await new Promise(resolve => setTimeout(resolve, 20));
     }
 

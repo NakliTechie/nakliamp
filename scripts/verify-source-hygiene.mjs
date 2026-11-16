@@ -19,6 +19,7 @@ const SOURCE = /\.(html|js|mjs|json|css|md|sh|toml|jsonc)$/;
 
 // Everything in C0 except tab (09) and line feed (0A). Carriage return (0D) is
 // included: this repository is LF-only, so a CR is a defect too.
+// oxlint-disable-next-line no-control-regex -- this check exists to find control characters
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 
 const files = [];
