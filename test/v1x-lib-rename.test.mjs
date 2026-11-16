@@ -98,7 +98,8 @@ test('renameOnDisk uses handle.move, refuses without it, and refuses an existing
   const moved = [];
   const handle = { name: 'old.mp3', move: async name => { moved.push(name); } };
   assert.equal(canRenameOnDisk(handle), true);
-  assert.equal(await renameOnDisk(handle, 'new.mp3'), 'new.mp3');
+  const free = { getFileHandle: async () => { throw new Error('NotFoundError'); } };
+  assert.equal(await renameOnDisk(handle, 'new.mp3', { parent: free }), 'new.mp3');
   assert.deepEqual(moved, ['new.mp3']);
   await assert.rejects(renameOnDisk({ name: 'a' }, 'b'), error => error.code === 'ERR_NAKLIAMP_RENAME_UNSUPPORTED' && /Chromium/.test(error.message));
   await assert.rejects(renameOnDisk(handle, 'a/b.mp3'), error => error.code === 'ERR_NAKLIAMP_RENAME_INVALID');

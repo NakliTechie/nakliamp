@@ -23,18 +23,29 @@ built from one list, `app/commands/commands.mjs` (published as `commands.json`):
 
 | Direction | Message |
 | --- | --- |
-| to NakliAmp | `{ type: 'command', name, input, id, target? }` |
+| to NakliAmp | `{ type: 'command', name, input, id, target?, auth? }` |
 | from NakliAmp | `{ type: 'result', id, instance, ok: true, value }` or `{ ..., ok: false, error: { code, message } }` |
-| to NakliAmp | `{ type: 'capabilities', id }`; the result's `value.commands` lists the accepted names |
+| to NakliAmp | `{ type: 'capabilities', id }`; `value.commands` lists the read commands, `value.paired` the ones a paired tab may run |
 | from NakliAmp | `{ type: 'event', event, seq, revision, time, instance, data }` |
 
-- The channel runs read and reversible commands. It refuses every destructive command with code
-  `refused`, because the person cannot see who asked; they run in the app, behind its confirm step.
-  It also refuses `network.grant`, because turning on a network service is the person's consent.
+- The channel is off until the person turns it on in Tools, Agent channel, for that tab only. The
+  switch is not stored and no command turns it on, because on `naklios.dev` every NakliOS app
+  shares one origin and could otherwise drive the player. While it is off, nothing answers and no
+  event is posted.
+- On, it runs read commands for any caller. A reversible command runs only when it is signed with
+  the tab's pairing code, which the person makes in the same dialog and pastes into the other tab:
+  `auth` is base64url HMAC-SHA256, keyed with the code (dashes and case ignored), over the lines
+  `nakliamp-channel-v1`, `target`, `id`, `name` and `JSON.stringify(input)`. `channelAuth()` in
+  `app/agent/events.mjs` computes it. The command must carry `target: <instance>`, and each `id` is
+  accepted once, so a page listening on the channel can neither learn the code nor replay a command.
+  A new code, turning the channel off or closing the tab ends the pairing.
+- Paired or not, the channel refuses every destructive command with code `refused`, because the
+  person cannot see who asked; they run in the app, behind its confirm step. It also refuses
+  `network.grant`, because turning on a network service is the person's consent; that command
+  shows NakliAmp's confirm dialog on every other door too (WebMCP, the NakliOS host, the keyboard).
 - An unknown name returns `not-found`; input that fails the JSON Schema returns `invalid-input`.
-- Each open NakliAmp tab answers. `instance` names the tab; send `target: <instance>` to address one.
-- The channel is same-origin. On `naklios.dev` every NakliOS app shares one origin and so already
-  shares NakliAmp's IndexedDB; the channel adds control, not data access.
+- Each open NakliAmp tab with the channel on answers. `instance` names the tab; send
+  `target: <instance>` to address one.
 
 ### Where else events go
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  channelAuth,
   CHANNEL_NAME, buildSnapshot, diffSnapshots, createEventPublisher, createChannelBridge,
   channelRefusal, channelCommandNames, instanceId,
 } from '../app/agent/events.mjs';
@@ -135,7 +136,8 @@ function fakeChannel() {
   };
 }
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+const settle = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms));
+const CODE = 'ABCDE-FGHJK-MNPQR-STUVW';
 
 test('channel: accepts a reversible command, answers with the id, then the events follow', async () => {
   const channel = fakeChannel();
@@ -147,9 +149,10 @@ test('channel: accepts a reversible command, answers with the id, then the event
   });
   const publisher = createEventPublisher({ getSnapshot: () => buildSnapshot(current), sinks: [m => channel.postMessage(m)], timers: fakeTimers() });
   publisher.start();
-  createChannelBridge({ channel, run, publisher, instance: 'tab-1' });
-  channel.deliver({ type: 'command', name: 'player.play', input: {}, id: 'a1' });
-  await settle();
+  createChannelBridge({ channel, run, publisher, instance: 'tab-1', pairingCode: () => CODE });
+  const auth = await channelAuth({ code: CODE, target: 'tab-1', id: 'a1', name: 'player.play', input: {} });
+  channel.deliver({ type: 'command', name: 'player.play', input: {}, id: 'a1', target: 'tab-1', auth });
+  await settle(20);
   assert.deepEqual(calls, ['channel']);
   assert.deepEqual(channel.posted[0], { type: 'result', id: 'a1', instance: 'tab-1', ok: true, value: { playing: true } });
   assert.equal(channel.posted[1].event, 'state-changed');
@@ -164,8 +167,9 @@ test('channel: refuses destructive, consent and unknown commands, and bad input;
   const channel = fakeChannel();
   let ran = 0;
   const handlers = Object.fromEntries(COMMANDS.map(c => [c.name, () => { ran += 1; return {}; }]));
-  const bridge = createChannelBridge({ channel, run: bindCommands(handlers, { confirm: () => true }), instance: 'tab-1' });
-  const ask = async message => { channel.posted.length = 0; channel.deliver(message); await settle(); return channel.posted[0]; };
+  const bridge = createChannelBridge({ channel, run: bindCommands(handlers, { confirm: () => true }), instance: 'tab-1', pairingCode: () => CODE });
+  const ask = async message => { channel.posted.length = 0; channel.deliver(message); await settle(20); return channel.posted[0]; };
+  const signed = async message => ({ ...message, auth: await channelAuth({ code: CODE, ...message }) });
 
   const destructive = await ask({ type: 'command', name: 'playlist.delete', input: { name: 'x' }, id: 1 });
   assert.equal(destructive.ok, false);
@@ -177,7 +181,7 @@ test('channel: refuses destructive, consent and unknown commands, and bad input;
   assert.equal((await ask({ type: 'command', name: 'network.grant', input: { service: 'lrclib' }, id: 2 })).error.code, 'refused');
   const unknown = await ask({ type: 'command', name: 'rm.rf', id: 3 });
   assert.deepEqual(unknown.error.code, 'not-found');
-  const bad = await ask({ type: 'command', name: 'player.seek', input: { percent: 500 }, id: 4 });
+  const bad = await ask(await signed({ type: 'command', name: 'player.seek', input: { percent: 500 }, id: 4, target: 'tab-1' }));
   assert.equal(bad.error.code, 'invalid-input');
   assert.equal(bad.error.message.startsWith('['), false);
   assert.equal(ran, 0);
@@ -186,7 +190,7 @@ test('channel: refuses destructive, consent and unknown commands, and bad input;
   assert.equal(await ask({ type: 'command', name: 'player.play', id: 5, target: 'tab-2' }), undefined);
   assert.equal(await ask({ type: 'result', id: 5, ok: true }), undefined);
   assert.equal(await ask(null), undefined);
-  assert.equal((await ask({ type: 'command', name: 'player.play', id: 6, target: 'tab-1' })).ok, true);
+  assert.equal((await ask(await signed({ type: 'command', name: 'player.play', id: 6, target: 'tab-1' }))).ok, true);
   assert.equal(ran, 1);
 
   const caps = await ask({ type: 'capabilities', id: 'c' });
@@ -194,6 +198,9 @@ test('channel: refuses destructive, consent and unknown commands, and bad input;
   assert.ok(caps.value.commands.includes('player.snapshot'));
   assert.equal(caps.value.commands.includes('playlist.delete'), false);
   assert.equal(caps.value.commands.includes('network.grant'), false);
+  assert.equal(caps.value.commands.includes('player.play'), false);
+  assert.ok(caps.value.paired.includes('player.play'));
+  assert.equal(caps.value.paired.includes('network.grant'), false);
 
   bridge.close();
   assert.equal(channel.listeners(), 0);
@@ -206,8 +213,9 @@ test('channel rules and manifest: snapshot, picker and volume link are commands'
   assert.equal(commandByName.get('visualiser.picker').scope, 'read');
   assert.deepEqual(commandByName.get('visualiser.picker').shortcut, ['Alt+V']);
   assert.equal(commandByName.get('visualiser.link_volume').scope, 'reversible');
-  const names = channelCommandNames();
+  const names = channelCommandNames(COMMANDS, { paired: true });
   assert.ok(names.length > 50);
   assert.ok(names.every(n => commandByName.get(n).scope !== 'destructive'));
+  assert.ok(channelCommandNames().every(n => commandByName.get(n).scope === 'read'));
   assert.match(instanceId(() => 0.5), /^nakliamp-80000000$/);
 });

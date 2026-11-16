@@ -1,6 +1,7 @@
 // Single-file release build.
 //
-// Emits `dist/nakliamp.html`: one file, no external references, no network.
+// Emits `dist/nakliamp.html`: one file, no external references, and no request until
+// the person turns on an opt-in network service.
 // Save it anywhere and open it.
 //
 // Why a build step rather than authoring one file by hand: the vendor pin gate
@@ -79,15 +80,12 @@ if (FULL) {
   // Since v1.x the page itself allows blob: in connect-src (the skin face
   // fetches a picked .wsz through one), so the full build only checks it.
   if (!/connect-src[^;]*\bblob:/.test(html)) throw new Error('The full build needs connect-src to allow blob: for the wasm.');
-  html = html.replace(
-    "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';",
-    "import { decodePcm, sniffPcm } from './app/decode/pcm.mjs';\n"
-    + "import { libavDecoder } from './app/decode/libav.mjs';",
-  );
-  html = html.replace(
-    "  { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm },",
-    "  { name: 'in-house PCM', sniff: sniffPcm, decode: decodePcm },\n  libavDecoder,",
-  );
+  // The streaming PCM decoder is registered as one object (N20); libav joins after it.
+  const pcmImport = "import { pcmDecoder } from './app/decode/pcm.mjs';";
+  const pcmEntry = '  pcmDecoder,';
+  if (!html.includes(pcmImport) || !html.includes(pcmEntry)) throw new Error('index.html no longer registers pcmDecoder where the full build adds libav.');
+  html = html.replace(pcmImport, `${pcmImport}\nimport { libavDecoder } from './app/decode/libav.mjs';`);
+  html = html.replace(pcmEntry, `${pcmEntry}\n  libavDecoder,`);
 }
 
 // The page's own module script names the entry points.
@@ -111,6 +109,7 @@ const licence = await readFile(resolve(root, 'vendor/mediabunny/LICENSE-MPL-2.0.
 // the artifact as its own inert block, like the Mediabunny licence.
 const EXTRA_LICENCES = Object.freeze([
   ['nakliamp-licence', 'LICENSE'],
+  ['reel-licence', 'engine/LICENSE-reel.txt'],
   ['music-metadata-licences', 'vendor/music-metadata/LICENSES.txt'],
   ['butterchurn-licence', 'vendor/butterchurn/LICENSE-MIT.txt'],
   ['butterchurn-presets-licence', 'vendor/butterchurn/LICENSE-presets-MIT.txt'],
@@ -221,13 +220,15 @@ document.documentElement.dataset.nakliampReady = '1';
 const banner = `<!--
 NakliAmp single-file release.
 
-Everything needed to play music is in this file. It makes no network requests
-of any kind once it is open: no analytics, no fonts, no CDN, no update check.
-Verify that with your browser's network tab.
+Everything needed to play music is in this file. It makes no network request
+until you turn on a service in the Network services panel (MusicBrainz, Cover
+Art Archive, LRCLIB or ListenBrainz); each is off until you do. There are no
+analytics, fonts, CDN or update check. Verify that with your browser's network tab.
 
 This file embeds the Reel media engine and the Mediabunny demuxer.
 Mediabunny is licensed MPL-2.0; its full licence text and the corresponding
-source location are included at the end of this file.
+source location are included at the end of this file, with the licence of
+every other library this file carries.
 
 ${vendorNotice.trim().split('\n').map(line => `  ${line}`).join('\n')}
 -->`;
@@ -256,5 +257,5 @@ await mkdir(resolve(root, dirname(OUTPUT)), { recursive: true });
 await writeFile(resolve(root, OUTPUT), output);
 
 const bytes = Buffer.byteLength(output);
-console.log(`PASS — Single-file build: ${OUTPUT}; ${modules.size} modules inlined; ${(bytes / 1024 / 1024).toFixed(2)} MB`);
+console.log(`PASS — Single-file build: ${OUTPUT}; ${modules.size} modules inlined; ${bytes} bytes (${(bytes / 1e6).toFixed(2)} MB)`);
 for (const path of modules.keys()) console.log(`  ${relative('.', join('.', path))}`);

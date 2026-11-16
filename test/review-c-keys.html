@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp review C gate</title>
+<style>#app{position:fixed;left:-10000px;top:0;width:1280px;height:860px;border:0}</style>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<iframe id="app" title="NakliAmp test app"></iframe>
+<script type="module">
+// Review C gate: keyboard and modal fixes (N6, N7, N8, N30 drop area), the seek slider's
+// spoken value (N42), the track announcement (N44), the Licences screen (N27), the agent
+// channel being off until the person turns it on (N9), and network.grant asking the person
+// (N16). The app runs in an iframe with ?harness=1. Keys are synthetic KeyboardEvents, so
+// they never press a button themselves; the checks are that NakliAmp's own handlers leave
+// the key alone (no preventDefault, no player change). Trusted-key runs over CDP are
+// recorded in plan/v1-build/review-outcomes-c.md.
+
+const result = document.querySelector('#result');
+const frame = document.querySelector('#app');
+const passed = [];
+const failed = [];
+const notes = {};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitFor(check, message, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await sleep(40);
+  }
+  throw new Error(typeof message === 'function' ? await message() : message);
+}
+
+async function check(id, fn) {
+  try { await fn(); passed.push(id); } catch (error) { failed.push(`${id}: ${String(error?.message ?? error).slice(0, 600)}`); }
+}
+
+async function fixture(name, WindowFile) {
+  const response = await fetch(`./fixtures/${name}`);
+  assert(response.ok, `${name}: fixture request failed (${response.status})`);
+  return new WindowFile([await response.arrayBuffer()], name, { type: response.headers.get('content-type') || '' });
+}
+
+async function run() {
+  const boot = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('NakliAmp iframe boot timed out.')), 20_000);
+    frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame.contentWindow); }, { once: true });
+  });
+  frame.src = '../index.html?harness=1';
+  const app = await boot;
+  if (!app.__errs) {
+    app.__errs = [];
+    const original = app.console.error.bind(app.console);
+    app.console.error = (...args) => { app.__errs.push(args.map(String).join(' ')); original(...args); };
+    app.addEventListener('error', event => app.__errs.push(`error: ${event.message}`));
+    app.addEventListener('unhandledrejection', event => app.__errs.push(`rejection: ${event.reason?.stack ?? event.reason}`));
+  }
+  const harness = await waitFor(() => app.__nakliampHarness, 'NakliAmp harness surface is unavailable.');
+  const doc = app.document;
+  const key = (target, k, init = {}) => {
+    const event = new app.KeyboardEvent('keydown', { key: k, code: k === ' ' ? 'Space' : '', bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    return event;
+  };
+  const dialog = () => doc.querySelector('.nk-dlg');
+  const closeDialogs = async () => {
+    for (const d of doc.querySelectorAll('.nk-dlg')) d.dispatchEvent(new app.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await waitFor(() => !dialog(), 'a dialog stayed open');
+  };
+
+  await check('N6 N30: the drop area is a group, and Enter on "Open a music folder" is not taken by it', async () => {
+    const drop = doc.querySelector('#drop');
+    assert(drop.getAttribute('role') === 'group' && !drop.hasAttribute('tabindex'), `#drop role ${drop.getAttribute('role')}, tabindex ${drop.getAttribute('tabindex')}`);
+    let filePicker = 0;
+    const realPicker = app.showOpenFilePicker;
+    app.showOpenFilePicker = async () => { filePicker += 1; throw new app.DOMException('stub', 'AbortError'); };
+    try {
+      const folder = doc.querySelector('#open-folder');
+      folder.focus();
+      for (const k of ['Enter', ' ']) {
+        const event = key(folder, k);
+        assert(!event.defaultPrevented, `${JSON.stringify(k)} on the folder button was cancelled`);
+      }
+      await sleep(100);
+      assert(filePicker === 0, `the single-file picker opened ${filePicker} times`);
+    } finally { app.showOpenFilePicker = realPicker; }
+  });
+
+  await harness.open(await fixture('audio-wav.wav', app.File));
+  await waitFor(() => harness.state().path, 'the fixture did not load');
+
+  await check('N44: a polite live region names the new track', async () => {
+    const region = doc.querySelector('#now-announce');
+    assert(region?.getAttribute('aria-live') === 'polite', 'no polite live region');
+    await waitFor(() => region.textContent.startsWith('Now playing: audio-wav'), () => `live region says "${region.textContent}"`);
+  });
+
+  await check('N42: the seek slider speaks minutes and seconds', async () => {
+    const seek = doc.querySelector('#seek');
+    await waitFor(() => /^\d+:\d\d of \d+:\d\d$/.test(seek.getAttribute('aria-valuetext') ?? ''), () => `aria-valuetext "${seek.getAttribute('aria-valuetext')}"`);
+  });
+
+  await check('N7: Space on a focused button is left to the button', async () => {
+    const tools = doc.querySelector('#tools-btn');
+    tools.focus();
+    const before = harness.state().clock.playing;
+    const event = key(tools, ' ');
+    await sleep(150);
+    assert(!event.defaultPrevented, 'Space on Tools was cancelled by the shortcut handler');
+    assert(harness.state().clock.playing === before, 'Space on Tools toggled playback');
+    // Space on the page body still plays and pauses.
+    doc.body.focus();
+    const body = key(doc.body, ' ');
+    assert(body.defaultPrevented, 'Space on the page no longer reaches player.toggle');
+    await waitFor(() => harness.state().clock.playing !== before, 'Space on the page did not toggle playback');
+    harness.pause();
+  });
+
+  await check('N8: R, S, N and Mod+Z do nothing behind an open dialog', async () => {
+    harness.openView('keymap');
+    const box = await waitFor(() => dialog(), 'the keymap did not open');
+    const button = box.querySelector('button');
+    button.focus();
+    const repeat = doc.querySelector('#repeat').getAttribute('aria-label');
+    const shuffle = doc.querySelector('#shuffle').getAttribute('aria-label');
+    const queueBefore = JSON.stringify(harness.queueSnapshot());
+    for (const k of ['r', 's', 'n']) key(button, k);
+    key(button, 'z', { ctrlKey: true, metaKey: true });
+    // Focus falls back to the body: the open dialog still owns the keys.
+    doc.body.focus();
+    key(doc.body, 'r');
+    await sleep(150);
+    assert(doc.querySelector('#repeat').getAttribute('aria-label') === repeat, `repeat changed to ${doc.querySelector('#repeat').getAttribute('aria-label')}`);
+    assert(doc.querySelector('#shuffle').getAttribute('aria-label') === shuffle, `shuffle changed to ${doc.querySelector('#shuffle').getAttribute('aria-label')}`);
+    assert(JSON.stringify(harness.queueSnapshot()) === queueBefore, 'the queue changed');
+    await closeDialogs();
+    // With the dialog closed, R repeats again.
+    doc.body.focus();
+    key(doc.body, 'r');
+    await waitFor(() => doc.querySelector('#repeat').getAttribute('aria-label') !== repeat, 'R did nothing with no dialog open');
+    key(doc.body, 'r'); key(doc.body, 'r');
+  });
+
+  await check('N27: Tools, Licences lists every licence and opens one', async () => {
+    const item = doc.querySelector('#tools-menu [data-view="licences"]');
+    assert(item, 'no Licences item in the Tools menu');
+    item.click();
+    const box = await waitFor(() => dialog()?.querySelector('.nk-lic'), 'the Licences screen did not open');
+    const entries = [...box.querySelectorAll('details')];
+    assert(entries.length >= 8, `${entries.length} licences listed`);
+    entries[0].open = true;
+    await waitFor(() => /MIT License/.test(entries[0].querySelector('pre').textContent), () => `first licence: ${entries[0].querySelector('pre').textContent.slice(0, 80)}`);
+    notes.licences = entries.map(e => e.querySelector('summary').textContent);
+    await closeDialogs();
+  });
+
+  await check('N9: the agent channel is off until the person turns it on, and then read only until paired', async () => {
+    const channel = new BroadcastChannel('nakliamp');
+    const replies = [];
+    channel.addEventListener('message', ({ data }) => { if (data?.type === 'result') replies.push(data); });
+    try {
+      // Other NakliAmp tabs of this origin may answer; only this app's instance counts.
+      const ours = id => replies.find(r => r.id === id && r.instance === harness.agentInstance());
+      channel.postMessage({ type: 'capabilities', id: 'off-1' });
+      await sleep(400);
+      notes.otherTabsAnswered = replies.filter(r => r.id === 'off-1').length;
+      assert(!ours('off-1'), 'the channel answered while off');
+      doc.querySelector('#tools-menu [data-view="agent-channel"]').click();
+      const box = await waitFor(() => dialog()?.querySelector('.nk-chan'), 'the Agent channel dialog did not open');
+      box.querySelector('input[role=switch]').click();
+      await waitFor(() => /read only/.test(box.textContent), 'the switch did not turn the channel on');
+      const instance = harness.agentInstance();
+      channel.postMessage({ type: 'command', name: 'player.volume', input: { level: 0.2 }, id: 'w-1', target: instance });
+      await waitFor(() => ours('w-1'), 'no reply to an unpaired write');
+      assert(ours('w-1').error?.code === 'refused', JSON.stringify(ours('w-1')));
+      [...box.querySelectorAll('button')].find(b => /pairing code/.test(b.textContent)).click();
+      const code = await waitFor(() => box.querySelector('.code:not([hidden])')?.textContent, 'no pairing code shown');
+      const { channelAuth } = await import('../app/agent/events.mjs');
+      const message = { type: 'command', name: 'player.volume', input: { level: 0.2 }, id: 'w-2', target: instance };
+      channel.postMessage({ ...message, auth: await channelAuth({ code, ...message }) });
+      await waitFor(() => ours('w-2'), 'no reply to a paired write');
+      assert(ours('w-2').ok === true, JSON.stringify(ours('w-2')));
+      box.querySelector('input[role=switch]').click();
+      await waitFor(() => /Off\./.test(box.textContent), 'the switch did not turn the channel off');
+      channel.postMessage({ type: 'capabilities', id: 'off-2' });
+      await sleep(400);
+      assert(!ours('off-2'), 'the channel answered after it was turned off');
+      await closeDialogs();
+    } finally { channel.close(); }
+  });
+
+  await check('N16: network.grant from a caller other than the panel shows a confirm, and Cancel grants nothing', async () => {
+    const pending = harness.run('network.grant', { origin: 'https://lrclib.net' }).then(() => 'ran', error => error.code ?? error.message);
+    const box = await waitFor(() => doc.querySelector('.nk-confirm')?.closest('.nk-dlg'), 'no confirm dialog for network.grant');
+    assert(/LRCLIB/.test(box.textContent) && /Sends:/.test(box.textContent), `confirm text: ${box.textContent.slice(0, 200)}`);
+    [...box.querySelectorAll('button')].find(b => /cancel/i.test(b.textContent)).click();
+    assert(await pending === 'declined', 'network.grant ran after Cancel');
+    const list = await harness.run('network.list');
+    assert(list.origins.every(row => !row.granted), JSON.stringify(list.origins.map(row => [row.origin, row.granted])));
+  });
+
+  try { harness.pause(); } catch { /* page gone */ }
+  return { errors: [...(app.__errs ?? []), ...(window.__errs ?? [])] };
+}
+
+run().then(({ errors }) => {
+  const ok = !failed.length && !errors.length;
+  result.dataset.status = ok ? 'pass' : 'fail';
+  result.textContent = JSON.stringify({ checks: passed.length + failed.length, passed: passed.length, failed, errors, notes }, null, 2);
+  document.title = `${ok ? 'PASS' : 'FAIL'} — NakliAmp review C gate`;
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = JSON.stringify({ aborted: error.stack || String(error), passed: passed.length, failed, notes }, null, 2);
+  document.title = 'FAIL — NakliAmp review C gate';
+});
+</script>
+</body>
+</html>

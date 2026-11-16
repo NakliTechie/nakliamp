@@ -83,7 +83,8 @@ const be16 = value => [(value >>> 8) & 0xff, value & 0xff];
 /** The 80-bit extended float AIFF stores its sample rate in. */
 function extended80(rate) {
   if (rate === 0) return Array.from({ length: 10 }).fill(0);
-  let exponent = 16383;
+  // high * 2^(exponent - 16383 - 31) = rate, with high normalised into [2^31, 2^32).
+  let exponent = 16383 + 31;
   let mantissa = rate;
   while (mantissa < 0x80000000) { mantissa *= 2; exponent -= 1; }
   while (mantissa >= 0x100000000) { mantissa /= 2; exponent += 1; }

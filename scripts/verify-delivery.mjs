@@ -71,6 +71,19 @@ try {
     try { await access(resolve(root, file)); missing.push(file); } catch { /* not a file here */ }
   }
   if (missing.length) console.log(`NOTE — NakliOS mirror manifest lacks ${missing.length} file(s): ${missing.join(', ')}`);
+  // A listed vendored file must travel with its licence notice (review 2026-11-17, N24, N25).
+  const NOTICES = [
+    ['engine/reel-engine.mjs', 'engine/LICENSE-reel.txt'],
+    ['vendor/webamp/webamp-2.3.1.bundle.min.mjs', 'vendor/webamp/LICENSES-bundled.txt'],
+    ['vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm', 'vendor/libav/LICENSE-LGPL-NOTICE.md'],
+    ['vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm', 'vendor/libav/LICENSE-LGPL-2.1.txt'],
+  ];
+  const noNotice = NOTICES.filter(([file, notice]) => listed.has(file) && !listed.has(notice)).map(([, notice]) => notice);
+  if (noNotice.length) console.log(`NOTE — NakliOS mirror manifest lists vendored code without its notice: ${noNotice.join(', ')}`);
+  // The hosted page never loads libav (only the full single-file build does), so a
+  // listed libav file is dead weight on the mirror (review 2026-11-17, N45).
+  const unloaded = [...listed].filter(file => /(^|\/)libav/.test(file) && !modules.includes(file) && !file.includes('LICENSE'));
+  if (unloaded.length) console.log(`NOTE — NakliOS mirror manifest lists ${unloaded.length} libav file(s) the hosted page never loads: ${unloaded.join(', ')}`);
 } catch {
   console.log('NOTE — NakliOS mirror manifest not readable here; mirror file list not compared.');
 }
@@ -108,6 +121,18 @@ assert(
   /The committed release gate is Chromium-only\./.test(readme),
   'The cross-browser release limitation is missing.',
 );
+// README claims that drifted once (review 2026-11-17, N29 and N46): the action count
+// must match commands.json, and NakliAmp's own wording names classic skins, not a product.
+const manifest = JSON.parse(await readFile(resolve(root, 'commands.json'), 'utf8'));
+const claimedActions = Number(/Its (\d+) player actions are published in `commands\.json`/.exec(readme)?.[1]);
+assert(
+  claimedActions === manifest.commands.length,
+  `README says ${claimedActions} player actions; commands.json has ${manifest.commands.length}.`,
+);
+assert(!/winamp/i.test(readme), 'README names Winamp; NakliAmp says "classic .wsz skins".');
+assert(!/tags are read-only/.test(readme), 'README says tags are read-only outside Chromium; the editor offers edited copies.');
+const soundPanel = await readFile(resolve(root, 'app/ui/sound-panel.mjs'), 'utf8');
+assert(!/winamp/i.test(soundPanel), 'The sound panel names Winamp; it says "EQF preset (.eqf)".');
 console.log(
   `PASS — Delivery policy: ${modules.length} modules reachable, all present; `
   + 'strict CSP (connect-src = self, blob: and the opt-in allowlist); source notice; Chromium-only gate',

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createConsent } from '../app/net/consent.mjs';
 import {
+  memoryTokenStore,
   createListenBrainz, createPlayTracker, shouldScrobble, scrobbleThresholdS, makeListen, backoffMs,
   LB_ORIGIN, LB_KEY, BATCH_MAX, BACKOFF_BASE_MS, BACKOFF_MAX_MS,
 } from '../app/net/listenbrainz.mjs';
@@ -11,9 +12,9 @@ const TOKEN = '0b9e1d6a-6f6c-4c55-9a0e-1234567890ab';
 const track = (n = 1) => ({ id: `t${n}`, title: `Song ${n}`, artist: 'Band', album: 'LP', durationS: 200, trackNo: n, path: '/secret/x.mp3' });
 const listen = (n = 1) => makeListen(track(n), 1_700_000_000 + n);
 
-function client({ routes, storage = memoryStorage(), clock = { t: 1_000_000 } } = {}) {
+function client({ routes, storage = memoryStorage(), clock = { t: 1_000_000 }, tokenStore = memoryTokenStore() } = {}) {
   const f = fakeFetch(routes);
-  const lb = createListenBrainz({ fetch: f, consent: grantedConsent(LB_ORIGIN), storage, now: () => clock.t, clientVersion: '1.0' });
+  const lb = createListenBrainz({ fetch: f, consent: grantedConsent(LB_ORIGIN), storage, tokenStore, now: () => clock.t, clientVersion: '1.0' });
   lb.setToken(TOKEN);
   return { lb, f, storage, clock };
 }
@@ -50,10 +51,11 @@ test('validate-token: sends Authorization: Token and reads user_name', async () 
   assert.deepEqual(await bad.lb.validateToken(), { valid: false, userName: null });
 });
 
-test('token: refused when malformed, stored when good', () => {
+test('token: refused when malformed, kept when good, and never written to localStorage (N15)', () => {
   const { lb, storage } = client({ routes: () => json({}) });
   assert.throws(() => lb.setToken('bad token!'), e => e.code === 'bad-input');
-  assert.equal(JSON.parse(storage.getItem(LB_KEY)).token, TOKEN);
+  assert.equal(lb.token(), TOKEN);
+  assert.equal(JSON.parse(storage.getItem(LB_KEY)).token, undefined);
   lb.clearToken();
   assert.equal(lb.token(), '');
 });
@@ -78,14 +80,16 @@ test('offline queue survives a restart and is retried in order with backoff', as
   const storage = memoryStorage(); const clock = { t: 5_000_000 };
   let online = false;
   const routes = () => { if (!online) throw new TypeError('Failed to fetch'); return json({ status: 'ok' }); };
-  const first = client({ routes, storage, clock });
+  // The token store stands in for the sealed vault, which outlives the page.
+  const tokenStore = memoryTokenStore();
+  const first = client({ routes, storage, clock, tokenStore });
   first.lb.enqueue(listen(1)); first.lb.enqueue(listen(2));
   const r1 = await first.lb.flush();
   assert.equal(r1.status, 'offline');
   assert.equal(r1.retryAt, clock.t + BACKOFF_BASE_MS);
   // A new page load: same storage, the queue is still there.
   const f2 = fakeFetch(routes);
-  const second = createListenBrainz({ fetch: f2, consent: grantedConsent(LB_ORIGIN), storage, now: () => clock.t });
+  const second = createListenBrainz({ fetch: f2, consent: grantedConsent(LB_ORIGIN), storage, tokenStore, now: () => clock.t });
   assert.equal(second.queued().length, 2);
   assert.equal((await second.flush()).status, 'waiting');
   assert.equal(f2.calls.length, 0);

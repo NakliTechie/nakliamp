@@ -286,8 +286,13 @@ async function startLibav() {
  * Read to end of file and decode every packet of one stream.
  * ff_read_frame_multi returns a batch and a status; one call yields a single
  * batch, which decodes to a few milliseconds.
+ *
+ * Decoded frames are appended one at a time. READ_LIMIT makes one batch the
+ * whole file, so an 85-minute WMA decodes to over 100,000 frames in one call,
+ * and spreading that many into `push(...)` throws RangeError (review finding
+ * N22). Exported for the gates; the app calls it only through decodeLibav.
  */
-async function readAllFrames(instance, { format, context, packet, frame }, streamIndex, readLimit) {
+export async function readAllFrames(instance, { format, context, packet, frame }, streamIndex, readLimit) {
   const frames = [];
   let emptyBatches = 0;
   for (let guard = 0; guard < 100_000; guard += 1) {
@@ -295,7 +300,7 @@ async function readAllFrames(instance, { format, context, packet, frame }, strea
     const stream = batch[streamIndex] ?? [];
     const done = status === instance.AVERROR_EOF;
     if (stream.length || done) {
-      frames.push(...await instance.ff_decode_multi(context, packet, frame, stream, done));
+      for (const decoded of await instance.ff_decode_multi(context, packet, frame, stream, done)) frames.push(decoded);
     }
     if (done) break;
     // A batch carrying packets for other streams only is ordinary in a file

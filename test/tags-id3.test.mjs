@@ -38,11 +38,13 @@ test('upgradeId3 converts an ID3v2.3 tag frame by frame', () => {
   const result = upgradeId3(concat(tag, new Uint8Array([0xff, 0xfb, 0x90, 0x00])));
   assert.equal(result.from, 3);
   assert.equal(result.tagLength, tag.length);
-  assert.deepEqual(result.dropped, ['RVAD']);
+  // RVAD has no ID3v2.4 form; it is carried under its old id, not dropped.
+  assert.deepEqual(result.dropped, []);
+  assert.deepEqual(result.legacy, ['RVAD']);
   assert.equal(readId3Header(result.tag).major, 4);
   const frames = listId3v24Frames(result.tag);
   const ids = frames.map((frame) => frame.id);
-  assert.deepEqual(ids.sort(), ['APIC', 'COMM', 'TDRC', 'TIT2', 'TPE1', 'TXXX'].sort());
+  assert.deepEqual(ids.sort(), ['APIC', 'COMM', 'RVAD', 'TDRC', 'TIT2', 'TPE1', 'TXXX'].sort());
   const tdrc = frames.find((frame) => frame.id === 'TDRC').body;
   assert.equal(ascii(tdrc, 1, tdrc.length - 1), '1987-04-03');
 });
@@ -60,9 +62,11 @@ test('upgradeId3 converts ID3v2.2 three-letter frames, including PIC', () => {
   const tag = id3Tag(2, [['TT2', latin1('Two Two')], ['TAL', latin1('Album 22')], ['TYE', latin1('1975')], ['PIC', pic], ['XYZ', latin1('?')]]);
   const result = upgradeId3(tag);
   assert.equal(result.from, 2);
-  assert.deepEqual(result.dropped, ['XYZ']);
+  // XYZ has no ID3v2.4 id; it is kept whole inside a PRIV frame.
+  assert.deepEqual(result.dropped, []);
+  assert.deepEqual(result.wrapped, ['XYZ']);
   const frames = listId3v24Frames(result.tag);
-  assert.deepEqual(frames.map((frame) => frame.id), ['TIT2', 'TALB', 'TDRC', 'APIC']);
+  assert.deepEqual(frames.map((frame) => frame.id), ['TDRC', 'TIT2', 'TALB', 'APIC', 'PRIV']);
   const apic = frames.find((frame) => frame.id === 'APIC').body;
   assert.equal(ascii(apic, 1, 9), 'image/png');
 });
@@ -93,7 +97,8 @@ test('writeTags turns an ID3v2.3 MP3 into ID3v2.4, keeps untouched frames and th
   const ids = listId3v24Frames(output).map((frame) => frame.id);
   assert.ok(ids.includes('TXXX'), 'ReplayGain TXXX kept');
   assert.ok(ids.includes('COMM'), 'comment kept');
-  assert.ok(!ids.includes('RVAD') && !ids.includes('TYER') && !ids.includes('TDAT'));
+  assert.ok(ids.includes('RVAD'), 'RVAD kept under its ID3v2.3 id');
+  assert.ok(!ids.includes('TYER') && !ids.includes('TDAT'), 'year and date folded into TDRC');
   if (tags.replayGain !== undefined && tags.replayGain !== null) assert.equal(tags.replayGain.trackGainDb, -6.2);
   assert.ok(equalBytes(mp3Audio(output), audio), 'audio unchanged');
 });

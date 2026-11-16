@@ -22,8 +22,8 @@
 |---|---|
 | **NakliOS** | Open [naklios.dev](https://naklios.dev) and start **NakliAmp**, the system music player. |
 | **Browser** | Open <https://naklios.dev/apps/nakliamp/>, the same app outside the NakliOS shell. |
-| **One file, lean** | `node scripts/build-single-file.mjs` writes `dist/nakliamp.html` (2.3 MB). |
-| **One file, full** | `node scripts/build-single-file.mjs --full` writes `dist/nakliamp-full.html` (4.7 MB), with the software decoder for WMA, WavPack, Monkey's Audio, Musepack, TTA, DSD and ALAC. |
+| **One file, lean** | `node scripts/build-single-file.mjs` writes `dist/nakliamp.html` (2.5 MB). |
+| **One file, full** | `node scripts/build-single-file.mjs --full` writes `dist/nakliamp-full.html` (4.9 MB), with the software decoder for WMA, WavPack, Monkey's Audio, Musepack, TTA, DSD and ALAC. |
 
 Pick your music folder, or drag it onto the window. NakliAmp indexes it in a background worker,
 subfolders included, and lists the tracks as it reads their tags. Press Space to play. Next time
@@ -36,12 +36,12 @@ analytics: verify with the network tab.
 Your music is a folder of files you bought, ripped or recorded. Most players want an account,
 a cloud library or a desktop install before they will play it.
 
-NakliAmp plays that folder in a tab. It has a play queue with shuffle and
-repeat, gapless playback within an album, crossfade, ReplayGain, a 10-band equaliser, media keys,
-browse by album, artist, genre, year and folder, smart playlists, tag editing, lyrics, 31
-visualiser modes and classic Winamp `.wsz` skins. The index is a cache over your folder; losing
-it costs a rescan. Playlists are `.m3u8` files written into your folder, so any other player
-can open them. Tag edits write back to the file in Chromium only; elsewhere tags are read-only.
+NakliAmp plays that folder in a tab. It has a play queue with shuffle and repeat, gapless playback
+within an album, crossfade, ReplayGain, a 10-band equaliser, media keys, browse by album, artist,
+genre, year and folder, smart playlists, tag editing, lyrics, 31 visualiser modes and classic `.wsz`
+skins. The index is a cache over your folder; losing it costs a rescan. Playlists are `.m3u8` files
+written into your folder, so any other player can open them. Tag edits write back to the file in
+Chromium only; elsewhere the tag editor offers each edited file as a copy to download.
 
 ## What it plays
 
@@ -73,9 +73,9 @@ fails on any request; with one service on, it fails on a request to any other or
 NakliAmp is the NakliOS music player; [Reel](https://github.com/NakliTechie/reel) is the media
 player. Both run the Reel engine, which NakliAmp pins at one commit and `scripts/verify-vendor.mjs`
 checks against the hashes in `VENDOR.md`. Inside NakliOS, NakliAmp follows the host theme and can
-make a playlist from a description through the NakliOS model; without a model, every other
-feature still works. Its 76 player actions are published in `commands.json`. When the browser
-offers `document.modelContext`, the read and reversible ones are registered as WebMCP tools.
+make a playlist from a description through the NakliOS model; without a model, every other feature
+still works. Its 85 player actions are published in `commands.json`. When the browser offers
+`document.modelContext`, they become WebMCP tools; destructive ones need its confirmation hook.
 
 ## Commands
 
@@ -113,8 +113,8 @@ The committed release gate is Chromium-only. Safari and Firefox behaviour is not
 
 ## License
 
-NakliAmp's own code is MIT ([LICENSE](LICENSE)). Vendored code keeps its own licence (`VENDOR.md`): Mediabunny
-MPL-2.0, libav.js LGPL-2.1 with its source notice, music-metadata, Butterchurn and Webamp MIT (neutral skin art).
+NakliAmp's own code is MIT ([LICENSE](LICENSE)). Vendored code keeps its own licence (`VENDOR.md`):
+Mediabunny MPL-2.0, libav.js LGPL-2.1 with its source notice, music-metadata, Butterchurn and Webamp MIT
+(neutral skin art, bundled libraries in `vendor/webamp/LICENSES-bundled.txt`). The Reel engine has no licence yet (`engine/LICENSE-reel.txt`).
 
-What shipped: [docs/specs/nakliamp-parity-001.md](docs/specs/nakliamp-parity-001.md) · vendored
-code: [VENDOR.md](VENDOR.md) · for agents: [commands.json](commands.json)
+What shipped: [docs/specs/nakliamp-parity-001.md](docs/specs/nakliamp-parity-001.md) · vendored code: [VENDOR.md](VENDOR.md) · for agents: [commands.json](commands.json)

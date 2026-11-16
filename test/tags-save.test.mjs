@@ -74,7 +74,7 @@ function fakeDirectory() {
   return directory;
 }
 
-test('saveTagsToHandle writes, verifies and removes the backup', async () => {
+test('saveTagsToHandle writes, verifies and keeps the backup with a record (review N14)', async () => {
   const original = await fixture('audio-flac.flac');
   const handle = fakeFile('song.flac', original);
   const root = fakeDirectory();
@@ -85,8 +85,11 @@ test('saveTagsToHandle writes, verifies and removes the backup', async () => {
   assert.equal(result.lastModified, 1001);
   assert.equal((await readTags(new Blob([handle.state.bytes]))).title, 'Saved');
   const backups = root.directories.get(BACKUP_DIRECTORY);
-  assert.deepEqual(backups.log, ['create song.flac', 'remove song.flac'], 'backup made before write, removed after verify');
-  assert.equal(backups.files.size, 0);
+  assert.deepEqual(backups.log, ['create song.flac'], 'backup made before write and kept, so the write can be undone');
+  assert.ok(equalBytes(backups.files.get('song.flac').state.bytes, original));
+  assert.equal(result.backup, 'song.flac');
+  const record = JSON.parse(new TextDecoder().decode(backups.directories.get('index').files.get('song.flac.json').state.bytes));
+  assert.equal(record.status, 'written');
 });
 
 test('saveTagsToHandle refuses when lastModified differs from the library record', async () => {
@@ -165,9 +168,9 @@ test('a kept backup is not overwritten by the next save of a same-named file', a
   stale.state.bytes = new Uint8Array([1, 2, 3]);
   const handle = fakeFile('song.flac', await fixture('audio-flac.flac'));
   await saveTagsToHandle(handle, { title: 'x' }, { backupRoot: async () => root });
-  assert.deepEqual([...backups.files.keys()], ['song.flac']);
+  assert.deepEqual([...backups.files.keys()], ['song.flac', 'song.flac (2)']);
   assert.deepEqual([...backups.files.get('song.flac').state.bytes], [1, 2, 3]);
-  assert.ok(backups.log.includes('create song.flac (2)') && backups.log.includes('remove song.flac (2)'));
+  assert.ok(backups.log.includes('create song.flac (2)'));
 });
 
 test('saveTagsToHandle refuses without permission and for unsupported formats', async () => {

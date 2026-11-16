@@ -543,7 +543,7 @@ async function run() {
     assert(await readFolderFile(root, 'Harness Queue.m3u8'), 'The playlist file is gone after Cancel.');
   });
 
-  await check('T4: tag edit through the confirm writes the file and removes the backup', async () => {
+  await check('T4: tag edit through the confirm writes the file and keeps its backup for undo', async () => {
     const id = idOf('Before Edit');
     const pending = harness.runAsPerson('track.edit_tags', { ids: [id], patch: { title: 'Edited Title' } });
     const confirm = await waitFor(() => doc.querySelector('.nk-confirm')?.closest('.nk-dlg'), 'No confirm dialog for track.edit_tags.', 20_000);
@@ -559,7 +559,8 @@ async function run() {
       const dir = await opfs.getDirectoryHandle('nakliamp-tag-backup');
       for await (const [name] of dir.entries()) backups.push(name);
     } catch { backups = []; }
-    assert(backups.length === 0, `Backups left: ${backups.join(', ')}.`);
+    // Since review A (N14) the backup of a good write stays, so the edit can be undone.
+    assert(backups.some(name => name.includes('Edit Me.mp3')), `Backups: ${backups.join(', ')}.`);
     await waitFor(() => byTitle('Edited Title'), 'The index did not pick up the new title.', 20_000);
   });
 

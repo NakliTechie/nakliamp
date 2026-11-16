@@ -116,7 +116,8 @@ test('new commands: scopes, inputs, and channel acceptance', () => {
   assert.deepEqual(commandByName.get('playlist.remove').input.required, ['name', 'index']);
   assert.deepEqual(commandByName.get('playlist.rename').input.required, ['name', 'to']);
   assert.equal(channelRefusal('spectrum.get'), null);
-  assert.equal(channelRefusal('queue.play'), null);
+  assert.equal(channelRefusal('queue.play', { paired: true }), null);
+  assert.equal(channelRefusal('queue.play').code, 'refused');
   assert.equal(channelRefusal('history.clear').code, 'refused');
   assert.equal(channelRefusal('playlist.remove').code, 'refused');
 });

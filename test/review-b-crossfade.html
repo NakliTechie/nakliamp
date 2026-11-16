@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NakliAmp crossfade gain check</title>
+</head>
+<body>
+<pre id="result" data-status="running">running</pre>
+<script type="module">
+// Review finding N4: a crossfade must keep the incoming track audible after the
+// next track is preloaded during its fade-in.
+//
+// Three tones on the gapless lane with a 1 s crossfade: A (440 Hz), B (1 kHz)
+// and C (2.5 kHz). B is preloaded while A plays; the moment the engine says it
+// moved to B, C is preloaded, as the shell does. The engine's analyser (after
+// the chain, before the volume) is sampled every 50 ms, and the level in each
+// tone's frequency bin is recorded. B must stay within 12 dB of its own loudest
+// level for the stretch between the end of its fade-in and the start of its
+// fade-out. No timing assertions: only levels inside generous windows.
+import { createNakliAmpEngine } from '../engine/nakliamp-engine.mjs';
+
+const result = document.querySelector('#result');
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const FADE_S = 1;
+const TONES = { a: { hz: 440, s: 3 }, b: { hz: 1000, s: 5 }, c: { hz: 2500, s: 3 } };
+
+function toneWav(seconds, frequency) {
+  const rate = 44100;
+  const frames = Math.round(rate * seconds);
+  const bytes = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(bytes);
+  const ascii = (offset, text) => [...text].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i += 1) view.setInt16(44 + i * 2, Math.round(Math.sin((i / rate) * frequency * 2 * Math.PI) * 9000), true);
+  return new File([bytes], `tone-${frequency}.wav`, { type: 'audio/wav' });
+}
+
+async function run() {
+  const engine = createNakliAmpEngine({ version: 'review-b' });
+  engine.setDsp({ gapless: 'off', crossfadeS: FADE_S });
+  const files = { a: toneWav(TONES.a.s, TONES.a.hz), b: toneWav(TONES.b.s, TONES.b.hz), c: toneWav(TONES.c.s, TONES.c.hz) };
+  const advances = [];
+  let preloadC = null;
+  engine.on('track-advanced', detail => {
+    advances.push({ name: detail.name, atMs: performance.now() });
+    // The shell preloads the track after next as soon as the engine moves on.
+    if (advances.length === 1) preloadC = engine.preload(files.c, { albumKey: 'c' });
+  });
+  const loaded = await engine.load(files.a, { albumKey: 'a' });
+  assert(loaded.path === 'lane', `A loaded on ${loaded.path}, not the lane.`);
+  await engine.play();
+  const joinB = await engine.preload(files.b, { albumKey: 'b' });
+  assert(joinB.joined && joinB.mode === 'crossfade', `B was not queued for a crossfade: ${JSON.stringify(joinB)}.`);
+
+  const analyser = engine.analyser();
+  assert(analyser, 'The engine gave no analyser on the lane.');
+  const bins = new Float32Array(analyser.frequencyBinCount);
+  const binOf = hz => Math.round(hz / (analyser.context.sampleRate / analyser.fftSize));
+  const samples = [];
+  const deadline = performance.now() + 20_000;
+  while (performance.now() < deadline) {
+    analyser.getFloatFrequencyData(bins);
+    const state = engine.state();
+    samples.push({
+      atMs: performance.now(),
+      name: state.media.name,
+      positionS: state.clock.positionS,
+      a: bins[binOf(TONES.a.hz)], b: bins[binOf(TONES.b.hz)], c: bins[binOf(TONES.c.hz)],
+    });
+    if (advances.length >= 2 && state.clock.positionS > 1.5) break;
+    await sleep(50);
+  }
+  const joinC = await preloadC;
+  engine.pause();
+  engine.destroy();
+  assert(advances.length >= 1, 'The engine never moved to B.');
+  assert(joinC?.joined, `C was not queued: ${JSON.stringify(joinC)}.`);
+
+  // B solo: from the end of its fade-in (+0.4 s for the analyser's smoothing)
+  // to the start of its fade-out (-0.4 s).
+  const onB = samples.filter(sample => sample.name === files.b.name);
+  const solo = onB.filter(sample => sample.positionS > FADE_S + 0.4 && sample.positionS < TONES.b.s - FADE_S - 0.4);
+  const loudestB = Math.max(...samples.map(sample => sample.b));
+  const quietestSolo = solo.length ? Math.min(...solo.map(sample => sample.b)) : null;
+  const report = {
+    advances: advances.map(entry => entry.name),
+    joinC,
+    loudestBDb: Number(loudestB.toFixed(1)),
+    quietestBSoloDb: quietestSolo === null ? null : Number(quietestSolo.toFixed(1)),
+    soloSamples: solo.length,
+    trace: samples.filter((_, index) => index % 4 === 0).map(sample => [sample.name?.slice(5, 9), Number(sample.positionS.toFixed(2)), Math.round(sample.a), Math.round(sample.b), Math.round(sample.c)]),
+  };
+  window.__report = report;
+  assert(solo.length >= 10, `Only ${solo.length} samples fell inside B's solo stretch.`);
+  assert(quietestSolo > loudestB - 12, `B dropped to ${quietestSolo.toFixed(1)} dB against its loudest ${loudestB.toFixed(1)} dB between its fade-in and fade-out. ${JSON.stringify(report)}`);
+  return report;
+}
+
+run().then(report => {
+  result.dataset.status = 'pass';
+  result.textContent = JSON.stringify(report);
+  document.title = 'PASS — NakliAmp crossfade gain check';
+}).catch(error => {
+  result.dataset.status = 'fail';
+  result.textContent = String(error?.stack || error);
+  document.title = 'FAIL — NakliAmp crossfade gain check';
+});
+</script>
+</body>
+</html>

@@ -426,8 +426,10 @@ async function editPlaylist(app, doc, harness, root, rows, waitFor) {
   app.confirm = () => true;
 
   doc.querySelector('#lib-rename').click();
-  await waitFor(async () => (await readFile(root, PLAYLIST_PATH)) !== afterRemove,
-    'The same-name rename did not rewrite the file.', 20_000);
+  // Since review C the rewrite keeps every line (N12), so a rename to the same name can write
+  // the same bytes; the rename's own report is the signal that it ran.
+  await waitFor(() => /Renamed to /.test(doc.querySelector('#lib-scan').textContent),
+    () => `The same-name rename did not run: ${doc.querySelector('#lib-scan').textContent.trim()}`, 20_000);
   assert(await readFile(root, PLAYLIST_PATH) !== null,
     'A rename that changed no file name deleted the playlist.');
 

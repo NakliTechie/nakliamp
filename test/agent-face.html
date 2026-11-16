@@ -19,6 +19,9 @@
 // The 2026-11-17 gaps follow on a small OPFS music folder: spectrum.get, queue.play,
 // if_revision conflicts, the snapshot's playlist name, playlist.rename, playlist.remove,
 // history.clear, and ui.pop_out refusing without a click.
+// Since review C (N9) the channel is off until the person turns it on in Tools, Agent
+// channel, and reversible commands need the tab's pairing code: this page clicks the
+// switch, makes a code, and signs every command with it (channelAuth), as a paired tab would.
 
 const result = document.querySelector('#result');
 const frame = document.querySelector('#app');
@@ -88,6 +91,8 @@ async function folderHas(root, name) {
 
 // ------------------------------------------------------------- channel ----
 
+import { channelAuth } from '../app/agent/events.mjs';
+
 const channel = new BroadcastChannel('nakliamp');
 const events = [];
 const waiting = new Map();
@@ -104,7 +109,20 @@ function send(message, timeoutMs = 10_000) {
     channel.postMessage({ ...message, id });
   });
 }
-const command = (name, input = {}) => send({ type: 'command', name, input });
+// The pairing code the person copied from NakliAmp, and this tab's target. Every command
+// is signed; read commands would run without it.
+let pairing = null;
+async function command(name, input = {}) {
+  if (!pairing) return send({ type: 'command', name, input });
+  const id = `gate-${++nextId}`;
+  const message = { type: 'command', name, input, target: pairing.target, id };
+  const auth = await channelAuth({ code: pairing.code, ...message });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`No reply to ${name} within 10000 ms.`)); }, 10_000);
+    waiting.set(id, reply => { clearTimeout(timer); resolve(reply); });
+    channel.postMessage({ ...message, auth });
+  });
+}
 const eventsSince = (mark, name) => events.slice(mark).filter(e => e.event === name);
 
 // ------------------------------------------------------------------ run ----
@@ -129,13 +147,35 @@ async function run() {
   const instance = harness.agentInstance();
   await harness.open(await fixture('audio-wav.wav', app.File));
 
-  await check('capabilities: read and reversible names, no destructive ones', async () => {
+  await check('N9: the channel is off until the person turns it on, then pairs with a code', async () => {
+    // Other NakliAmp tabs of this origin may answer; only this app's instance counts.
+    const off = await send({ type: 'capabilities' }, 600).then(reply => (reply.instance === instance ? 'answered' : 'silent'), () => 'silent');
+    assert(off === 'silent', 'the channel answered before the person turned it on');
+    harness.openView('agent-channel');
+    const box = await waitFor(() => doc.querySelector('.nk-chan'), 'the Agent channel dialog did not open');
+    box.querySelector('input[role=switch]').click();
+    [...box.querySelectorAll('button')].find(b => /pairing code/.test(b.textContent)).click();
+    const code = await waitFor(() => box.querySelector('.code:not([hidden])')?.textContent, 'no pairing code shown');
+    pairing = { code, target: instance };
+    doc.querySelector('.nk-dlg').dispatchEvent(new app.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await waitFor(() => !doc.querySelector('.nk-dlg'), 'the dialog stayed open');
+  });
+
+  await check('capabilities: read names for anyone, reversible ones only paired, no destructive ones', async () => {
     const reply = await send({ type: 'capabilities' });
     assert(reply.ok && reply.instance === instance, `capabilities reply: ${JSON.stringify(reply).slice(0, 200)}`);
     const names = reply.value.commands;
-    assert(names.includes('player.snapshot') && names.includes('player.play'), 'snapshot or play missing');
-    assert(!names.includes('playlist.delete') && !names.includes('track.edit_tags'), 'a destructive command is offered');
-    notes.channelCommands = names.length;
+    const paired = reply.value.paired;
+    assert(names.includes('player.snapshot') && !names.includes('player.play'), 'read list wrong');
+    assert(paired.includes('player.play'), 'play missing from the paired list');
+    assert(![...names, ...paired].includes('playlist.delete') && ![...names, ...paired].includes('track.edit_tags'), 'a destructive command is offered');
+    assert(!paired.includes('network.grant'), 'network.grant is offered');
+    notes.channelCommands = { read: names.length, paired: paired.length };
+  });
+
+  await check('N9: an unsigned reversible command is refused', async () => {
+    const reply = await send({ type: 'command', name: 'player.play', input: {}, target: instance });
+    assert(!reply.ok && reply.error.code === 'refused', JSON.stringify(reply));
   });
 
   await check('snapshot: full state, loaded and paused, no path', async () => {
@@ -231,7 +271,10 @@ async function run() {
   const ids = [idOf('Gate One'), idOf('Gate Two')];
 
   await check('capabilities: the new read and reversible commands, not the new destructive ones', async () => {
-    const names = (await send({ type: 'capabilities' })).value.commands;
+    const caps = (await send({ type: 'capabilities' })).value;
+    // Read commands for anyone, reversible ones for a paired tab (N9).
+    const names = [...caps.commands, ...caps.paired];
+    assert(caps.commands.includes('spectrum.get') && !caps.commands.includes('queue.play'), 'read list wrong');
     for (const name of ['spectrum.get', 'queue.play', 'playlist.rename', 'ui.pop_out']) assert(names.includes(name), `${name} missing`);
     for (const name of ['history.clear', 'playlist.remove']) assert(!names.includes(name), `${name} offered`);
   });
@@ -299,6 +342,9 @@ async function run() {
     select.value = [...select.options].find(option => option.textContent.startsWith('Gate List'))?.value ?? '';
     select.dispatchEvent(new app.Event('change', { bubbles: true }));
     const row = await waitFor(() => doc.querySelector('#lib-list .lib-row'), 'no playlist row');
+    // N30: the row's Move and Remove buttons sit beside the row button, not inside it.
+    assert(!doc.querySelector('#lib-list .lib-row button, #lib-list .lib-row .row-tools'), 'a button is nested inside a row button');
+    assert(doc.querySelectorAll('#lib-list li > .row-tools button').length >= 3, 'the row tools are missing');
     row.dispatchEvent(new app.MouseEvent('dblclick', { bubbles: true }));
     await waitFor(async () => (await command('player.snapshot')).value.playlist === 'Gate List',
       async () => `snapshot playlist ${(await command('player.snapshot')).value.playlist}`);

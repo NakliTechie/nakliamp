@@ -48,9 +48,27 @@ assert(/connect-src 'self'/.test(html), 'The artifact CSP no longer restricts ne
 // MPL-2.0 obliges the licence to travel with the code, and this file travels alone.
 assert(/id="mediabunny-licence"/.test(html), 'The artifact does not carry the Mediabunny licence.');
 assert(/id="nakliamp-licence"/.test(html), 'The artifact does not carry NakliAmp\'s own licence.');
+// The Reel engine is inlined, so its licence notice travels with it.
+assert(/id="reel-licence"/.test(html) && /Licence notice for engine\/reel-engine\.mjs/.test(html),
+  'The artifact embeds the Reel engine but not its licence notice.');
+assert(/id="music-metadata-licences"/.test(html) && /id="butterchurn-licence"/.test(html) && /id="butterchurn-presets-licence"/.test(html),
+  'The artifact omits a vendored library licence block.');
+// The banner promises no request until a service is turned on; it must not claim none at all.
+assert(/no network request\s+until you turn on a service/.test(html), 'The banner no longer states the opt-in network rule.');
+assert(!/makes no network requests\s+of any kind/.test(html), 'The banner claims no network requests of any kind, which the opt-in services contradict.');
 if (target.includes('full')) {
   assert(/id="libav-lgpl-licence"/.test(html) && /id="libav-lgpl-notice"/.test(html),
     'The full artifact embeds libav but not its LGPL-2.1 text and source notice.');
+  // LGPL-2.1 asks for the corresponding source: the notice must name the tag, the
+  // component configuration, the build command and where the NakliAmp copy lives.
+  const notice = /id="libav-lgpl-notice">([\s\S]*?)<\/script>/.exec(html)?.[1] ?? '';
+  for (const [fact, pattern] of [
+    ['the libav.js repository and tag', /github\.com\/Yahweasel\/libav\.js`, tag `v6\.10\.9\.0`/],
+    ['the FFmpeg version', /FFmpeg 9\.0/],
+    ['the component configuration', /node mkconfig\.js nakliamp '\["avformat"[\s\S]*"decoder-alac"\]'/],
+    ['the build command', /make build-nakliamp/],
+    ['the NakliAmp repository', /github\.com\/NakliTechie\/nakliamp/],
+  ]) assert(pattern.test(notice), `The libav source notice in the full artifact omits ${fact}.`);
 }
 assert(/Mozilla Public License/.test(html), 'The embedded licence text is missing.');
 assert(
@@ -104,10 +122,15 @@ try {
 }
 
 const { size } = await stat(path);
+// The README states each artifact's size in MB to one decimal; keep it within 0.1 MB.
+const readmeText = await readFile(resolve(root, 'README.md'), 'utf8');
+const claimedMb = Number(new RegExp(`\`${target.replace('.', '\\.')}\` \\(([0-9.]+) MB\\)`).exec(readmeText)?.[1]);
+assert(Number.isFinite(claimedMb), `README states no size for ${target}.`);
+assert(Math.abs(claimedMb - size / 1e6) <= 0.1, `README says ${target} is ${claimedMb} MB; it is ${(size / 1e6).toFixed(2)} MB.`);
 assert(size > 512 * 1024, `The artifact is ${size} bytes, too small to contain the engine.`);
 assert(size < (target.includes('full') ? 12 : 4) * 1024 * 1024, `The artifact is ${(size / 1024 / 1024).toFixed(1)} MB, past the release budget.`);
 
 console.log(
-  `PASS — Single-file release (${target}): ${(size / 1024 / 1024).toFixed(2)} MB; `
+  `PASS — Single-file release (${target}): ${size} bytes (${(size / 1e6).toFixed(2)} MB); `
   + `${Object.keys(sources).length} modules parse; zero external references; licence and pin carried`,
 );

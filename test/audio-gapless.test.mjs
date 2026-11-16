@@ -173,11 +173,13 @@ test('lane gain: each voice carries its own track gain', () => {
   const a = { ...item('a', 2), gainDb: -6 };
   lane.load(a);
   lane.play();
-  const gain = [...context.sources[0].outputs][0];
+  // source -> fade stage -> level stage (the track gain) -> destination
+  const level = source => [...[...source.outputs][0].outputs][0];
+  const gain = level(context.sources[0]);
   assert.ok(Math.abs(gain.gain.value - Math.pow(10, -6 / 20)) < 1e-12);
   lane.setCurrentGainDb(-3);
   assert.equal(gain.gain.calls.at(-1)[0], 'target');
   lane.queue({ ...item('b', 2), gainDb: 2 }, { mode: 'gapless' });
-  const nextGain = [...context.sources[1].outputs][0];
+  const nextGain = level(context.sources[1]);
   assert.ok(Math.abs(nextGain.gain.value - Math.pow(10, 2 / 20)) < 1e-12);
 });
