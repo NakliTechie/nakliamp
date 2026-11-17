@@ -266,7 +266,7 @@ does. The design below stops silent and generic access and makes every consent t
 # Review outcomes, batch D (2026-11-17)
 
 Source: `plan/review-fable-2026-11-17.md`. Scope: N24, N25, N26, N29, N35, N38, N39, N45, N46, N47, N48.
-Result: 10 of 11 fixed; N24 has its notice shipped and its licence gap left open for the Reel owner.
+Result: 11 of 11 fixed. N24 closed 2026-11-17 after Chirag licensed Reel under MIT (Reel commit 1496ba6); `engine/LICENSE-reel.txt` now carries that MIT text.
 
 ## Checks that ran (2026-11-17, after the last edit)
 
@@ -286,7 +286,7 @@ Result: 10 of 11 fixed; N24 has its notice shipped and its licence gap left open
 
 | ID | Outcome | Proof |
 |---|---|---|
-| N24 | Notice shipped; licence gap open. Reel has no LICENSE at commit `292b091` and its README says so. I added `engine/LICENSE-reel.txt` stating that, the author (Chirag Patnaik, every commit to the file) and that NakliAmp's MIT licence does not by itself cover the file. VENDOR.md says the same; both single-file builds carry block `reel-licence`; README's licence section names it. `engine/reel-engine.mjs` is unchanged. | `verify-vendor.mjs` (hash and VENDOR.md name), `verify-single-file.mjs` (block present) |
+| N24 | Fixed 2026-11-17. Chirag licensed Reel under MIT (Reel commit `1496ba6`, `LICENSE`). `engine/LICENSE-reel.txt` carries that text, states that it covers the vendored file pinned at `292b091`, and ships in both single-file builds (`reel-licence`); VENDOR.md, README and the licences screen (which reads the same file) say MIT. Gate: `scripts/verify-vendor.mjs` pins the new notice hash. |
 | N25 | Fixed. `vendor/webamp/LICENSES-bundled.txt` holds the licence text of all 38 third-party package versions in the bundle, each from its npm tarball at the version the webamp 2.3.1 source map names; pako 1.0.11 and setimmediate 1.0.5 come from JSZip's prebuilt file, and pako's zlib licence is included. VENDOR.md lists them and pins the file's hash. | `verify-vendor.mjs` (hash, sections for React, react-dom, Redux, react-redux, JSZip, pako) |
 | N26 | Fixed. `vendor/libav/LICENSE-LGPL-NOTICE.md` now names the corresponding source: libav.js tag `v6.10.9.0` (FFmpeg 9.0), the full component configuration, `make build-nakliamp`, the emsdk digest, the NakliAmp repository URL and how to replace the library. New SHA-256 in `verify-vendor.mjs` and VENDOR.md. | `verify-vendor.mjs` (6 facts), `verify-single-file.mjs --full` (5 facts inside block `libav-lgpl-notice`) |
 | N29 | Fixed. README: 85 player actions (was 76); sizes 2.5 MB and 4.9 MB (were 2.3 and 4.7); outside Chromium the tag editor offers edited copies to download (was "read-only"); WebMCP registers every command, destructive ones only with a confirmation hook. README stays at 120 lines. | `verify-delivery.mjs` (action count equals `commands.json`, no "read-only" claim), `verify-single-file.mjs` (README size within 0.1 MB of each artifact) |

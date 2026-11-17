@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const expected = Object.freeze({
   'engine/reel-engine.mjs': '791a691fd8d0d95c9cf7fd27adf3bad2469c918f15e30ed9e57f05d0dad4c175',
-  'engine/LICENSE-reel.txt': 'e0450e0052c411fb725bcdb18ffbd71423279eca716938d74817061e19368d31',
+  'engine/LICENSE-reel.txt': '741108235dce3ce3947f4fb000e40cb8de7a4a3f02a18790f2cd91bbe99399bc',
   'vendor/mediabunny/mediabunny-1.51.0.min.mjs': '1cd761e442a173c461b1a63cba29cb0816383f3b93b78d64b6e44c6dbce85d2b',
   'vendor/mediabunny/LICENSE-MPL-2.0.txt': '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04',
   'vendor/libav/libav-6.10.9.0-nakliamp.wasm.wasm': 'cdc5ce039f8e584f01a22d94e5026a17caa61d870978920a29c898ac39b46cd3',
